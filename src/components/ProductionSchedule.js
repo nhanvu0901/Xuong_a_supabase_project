@@ -48,7 +48,30 @@ const ProductionSchedule = () => {
         }
     };
 
-    const adjustSchedulesForDayOff = async (offDate) => {
+    const calculateNextWorkingDay = async (date) => {
+        let nextDay = addDays(date, 1);
+
+        // Check employee schedule to find next working day
+        while (true) {
+            if (!isSunday(nextDay)) {
+                const { data: daySchedule } = await supabase
+                    .from('employee_schedule')
+                    .select('is_working')
+                    .eq('date', format(nextDay, 'yyyy-MM-dd'))
+                    .single();
+
+                if (!daySchedule || daySchedule.is_working !== false) {
+                    break;
+                }
+            }
+            nextDay = addDays(nextDay, 1);
+        }
+
+        return format(nextDay, 'yyyy-MM-dd');
+    };
+
+    // Wrap adjustSchedulesForDayOff in useCallback to prevent infinite re-renders
+    const adjustSchedulesForDayOff = useCallback(async (offDate) => {
         try {
             // Fetch schedules that might be affected by this day off
             const { data: affectedSchedules, error } = await supabase
@@ -83,29 +106,7 @@ const ProductionSchedule = () => {
         } catch (error) {
             console.error('Error adjusting schedules for day off:', error);
         }
-    };
-
-    const calculateNextWorkingDay = async (date) => {
-        let nextDay = addDays(date, 1);
-
-        // Check employee schedule to find next working day
-        while (true) {
-            if (!isSunday(nextDay)) {
-                const { data: daySchedule } = await supabase
-                    .from('employee_schedule')
-                    .select('is_working')
-                    .eq('date', format(nextDay, 'yyyy-MM-dd'))
-                    .single();
-
-                if (!daySchedule || daySchedule.is_working !== false) {
-                    break;
-                }
-            }
-            nextDay = addDays(nextDay, 1);
-        }
-
-        return format(nextDay, 'yyyy-MM-dd');
-    };
+    }, []); // Empty dependency array since it doesn't depend on any props or state
 
     const handleEmployeeScheduleChange = useCallback(async (payload) => {
         // When employee schedule changes, check if we need to adjust production schedules
@@ -118,10 +119,13 @@ const ProductionSchedule = () => {
                 type: 'warning'
             }]);
         }
-    }, []);
+    }, [adjustSchedulesForDayOff]);
 
     useEffect(() => {
         fetchSchedules();
+    }, []);
+
+    useEffect(() => {
         // Subscribe to employee schedule changes
         const subscription = supabase
             .channel('employee-schedule-changes')
@@ -218,6 +222,20 @@ const ProductionSchedule = () => {
         }
     };
 
+    const getStatusColor = (status) => {
+        switch (status) {
+            case 'pending': return 'pending';
+            case 'pending_material': return 'pending';
+            case 'in_progress': return 'in-progress';
+            case 'completed': return 'completed';
+            default: return 'pending';
+        }
+    };
+
+    const getPriorityClass = (priority) => {
+        return priority === 'urgent' ? 'urgent' : 'normal';
+    };
+
     if (loading) {
         return <div className="loading">Đang tải...</div>;
     }
@@ -234,105 +252,105 @@ const ProductionSchedule = () => {
                 {/* Notifications */}
                 {notifications.length > 0 && (
                     <div className="notifications">
-                        {notifications.slice(0, 3).map(notification => (
+                        {notifications.slice(-3).map(notification => (
                             <div key={notification.id} className={`notification ${notification.type}`}>
                                 {notification.message}
+                                <button onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}>
+                                    ×
+                                </button>
                             </div>
                         ))}
                     </div>
                 )}
             </div>
 
-            <div className="content">
-                <div className="table-container">
-                    <table>
-                        <thead>
-                        <tr>
-                            <th>Mã ĐH</th>
-                            <th>Khách hàng</th>
-                            <th>Sản phẩm</th>
-                            <th>Ưu tiên</th>
-                            <th>Ngày thử (Dự kiến)</th>
-                            <th>Ngày thử (Thực tế)</th>
-                            <th>Ngày lấy (Dự kiến)</th>
-                            <th>Ngày lấy (Thực tế)</th>
-                            <th>Trạng thái</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {schedules.map(schedule => {
-                            const productName = schedule.order_items?.products?.name ||
-                                schedule.order_items?.notes ||
-                                'Sản phẩm';
-                            return (
-                                <tr key={schedule.id}>
-                                    <td>#{schedule.order_id?.slice(0, 8)}</td>
-                                    <td>{schedule.orders?.customers?.name}</td>
-                                    <td>
-                                        {productName}
-                                        {schedule.order_items?.quantity > 1 && ` x${schedule.order_items.quantity}`}
-                                        {schedule.order_items?.products?.type === 'ao_dai' &&
-                                            <span className="badge">Áo dài</span>}
-                                    </td>
-                                    <td>
-                                        <span className={`priority-badge ${schedule.orders?.priority === 'urgent' ? 'urgent' : 'normal'}`}>
-                                            {schedule.orders?.priority === 'urgent' ? 'Khẩn cấp' : 'Thường'}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        {schedule.scheduled_fitting_date &&
-                                            format(new Date(schedule.scheduled_fitting_date), 'dd/MM/yyyy')}
-                                    </td>
-                                    <td>
-                                        <input
-                                            type="date"
-                                            value={schedule.actual_fitting_date || ''}
-                                            onChange={(e) => updateActualDate(schedule.id, 'actual_fitting_date', e.target.value)}
-                                            className="date-input"
-                                        />
-                                    </td>
-                                    <td>
-                                        {schedule.scheduled_pickup_date &&
-                                            format(new Date(schedule.scheduled_pickup_date), 'dd/MM/yyyy')}
-                                        {schedule.requires_overtime && (
-                                            <span className="overtime-badge">
-                                                OT: {schedule.overtime_hours}h
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td>
-                                        <input
-                                            type="date"
-                                            value={schedule.actual_pickup_date || ''}
-                                            onChange={(e) => updateActualDate(schedule.id, 'actual_pickup_date', e.target.value)}
-                                            className="date-input"
-                                        />
-                                    </td>
-                                    <td>
-                                        <select
-                                            value={schedule.status}
-                                            onChange={(e) => updateStatus(schedule.id, e.target.value)}
-                                            className={`status-select status-${schedule.status}`}
-                                        >
-                                            <option value="pending">Chờ xử lý</option>
-                                            <option value="pending_material">Chờ vật liệu</option>
-                                            <option value="cutting">Cắt vải</option>
-                                            <option value="sewing">May</option>
-                                            <option value="finishing">Hoàn thiện</option>
-                                            <option value="decorating">Trang trí</option>
-                                            <option value="completed">Hoàn thành</option>
-                                        </select>
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                        </tbody>
-                    </table>
-                    {schedules.length === 0 && (
-                        <div className="empty-state">
-                            Chưa có lịch sản xuất nào
-                        </div>
-                    )}
+            <div className="card">
+                <div className="card-header">Bảng theo dõi tiến độ</div>
+                <div className="card-body">
+                    <div className="table-responsive">
+                        <table className="table">
+                            <thead>
+                            <tr>
+                                <th>Khách hàng</th>
+                                <th>Sản phẩm</th>
+                                <th>Độ ưu tiên</th>
+                                <th>Ngày thử dự kiến</th>
+                                <th>Ngày thử thực tế</th>
+                                <th>Ngày lấy dự kiến</th>
+                                <th>Ngày lấy thực tế</th>
+                                <th>Trạng thái</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {schedules.map(schedule => {
+                                const product = schedule.order_items?.products;
+                                const isDelayed = schedule.actual_pickup_date &&
+                                    new Date(schedule.actual_pickup_date) > new Date(schedule.scheduled_pickup_date);
+
+                                return (
+                                    <tr key={schedule.id} className={isDelayed ? 'delayed-row' : ''}>
+                                        <td>{schedule.orders?.customers?.name}</td>
+                                        <td>
+                                            {product?.name || schedule.order_items?.notes || 'N/A'}
+                                            {schedule.order_items?.quantity > 1 && ` x${schedule.order_items.quantity}`}
+                                        </td>
+                                        <td>
+                                                <span className={`status-badge status-${getPriorityClass(schedule.orders?.priority)}`}>
+                                                    {schedule.orders?.priority === 'urgent' ? 'Khẩn cấp' : 'Thường'}
+                                                </span>
+                                        </td>
+                                        <td>
+                                            {schedule.scheduled_fitting_date &&
+                                                format(new Date(schedule.scheduled_fitting_date), 'dd/MM/yyyy')}
+                                        </td>
+                                        <td>
+                                            <input
+                                                type="date"
+                                                value={schedule.actual_fitting_date || ''}
+                                                onChange={(e) => updateActualDate(schedule.id, 'actual_fitting_date', e.target.value)}
+                                                className="date-input"
+                                            />
+                                        </td>
+                                        <td>
+                                            {schedule.scheduled_pickup_date &&
+                                                format(new Date(schedule.scheduled_pickup_date), 'dd/MM/yyyy')}
+                                            {schedule.requires_overtime && (
+                                                <span className="overtime-badge">
+                                                        OT: {schedule.overtime_hours}h
+                                                    </span>
+                                            )}
+                                        </td>
+                                        <td>
+                                            <input
+                                                type="date"
+                                                value={schedule.actual_pickup_date || ''}
+                                                onChange={(e) => updateActualDate(schedule.id, 'actual_pickup_date', e.target.value)}
+                                                className="date-input"
+                                            />
+                                        </td>
+                                        <td>
+                                            <select
+                                                value={schedule.status}
+                                                onChange={(e) => updateStatus(schedule.id, e.target.value)}
+                                                className={`status-select status-${getStatusColor(schedule.status)}`}
+                                            >
+                                                <option value="pending">Chờ xử lý</option>
+                                                <option value="pending_material">Chờ vật liệu</option>
+                                                <option value="in_progress">Đang thực hiện</option>
+                                                <option value="completed">Hoàn thành</option>
+                                            </select>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                            </tbody>
+                        </table>
+                        {schedules.length === 0 && (
+                            <div className="empty-state">
+                                Chưa có lịch sản xuất nào
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
-import { vi } from 'date-fns/locale';
+
 
 const OrderSummary = () => {
     const [orders, setOrders] = useState([]);
