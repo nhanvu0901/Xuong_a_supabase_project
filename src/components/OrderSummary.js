@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -9,38 +9,19 @@ const OrderSummary = () => {
     const [error, setError] = useState(null);
     const [notifications, setNotifications] = useState([]);
 
-    useEffect(() => {
+    const handleScheduleUpdate = useCallback((payload) => {
+        // Add notification when schedule is updated
+        setNotifications(prev => [...prev, {
+            id: Date.now(),
+            order_id: payload.new.order_id,
+            message: 'Lịch sản xuất đã được cập nhật',
+            timestamp: new Date(),
+            type: 'schedule_update'
+        }]);
+
+        // Refresh orders to show updated dates
         fetchOrders();
-
-        // Subscribe to production schedule changes for notifications
-        const subscription = supabase
-            .channel('production-updates')
-            .on('postgres_changes',
-                { event: 'UPDATE', schema: 'public', table: 'production_schedule' },
-                handleScheduleUpdate
-            )
-            .subscribe();
-
-        return () => {
-            subscription.unsubscribe();
-        };
     }, []);
-
-    const handleScheduleUpdate = (payload) => {
-        if (payload.new.adjustment_reason) {
-            // Add notification when schedule is adjusted
-            setNotifications(prev => [...prev, {
-                id: Date.now(),
-                order_id: payload.new.order_id,
-                message: payload.new.adjustment_reason,
-                timestamp: new Date(),
-                type: 'schedule_update'
-            }]);
-
-            // Refresh orders to show updated dates
-            fetchOrders();
-        }
-    };
 
     const fetchOrders = async () => {
         try {
@@ -61,6 +42,7 @@ const OrderSummary = () => {
                         id,
                         quantity,
                         unit_price,
+                        notes,
                         products (
                             name,
                             type
@@ -72,7 +54,6 @@ const OrderSummary = () => {
                         actual_fitting_date,
                         actual_pickup_date,
                         status,
-                        adjustment_reason,
                         requires_overtime,
                         overtime_hours
                     )
@@ -89,6 +70,23 @@ const OrderSummary = () => {
             setLoading(false);
         }
     };
+
+    useEffect(() => {
+        fetchOrders();
+
+        // Subscribe to production schedule changes for notifications
+        const subscription = supabase
+            .channel('production-updates')
+            .on('postgres_changes',
+                { event: 'UPDATE', schema: 'public', table: 'production_schedule' },
+                handleScheduleUpdate
+            )
+            .subscribe();
+
+        return () => {
+            subscription.unsubscribe();
+        };
+    }, [handleScheduleUpdate]);
 
     const getStatusColor = (status) => {
         switch (status) {
@@ -107,183 +105,115 @@ const OrderSummary = () => {
         }
     };
 
-    const formatDate = (date) => {
-        if (!date) return '-';
-        return format(new Date(date), 'dd/MM/yyyy', { locale: vi });
-    };
+    if (loading) {
+        return <div className="loading">Đang tải...</div>;
+    }
 
-    const formatDateTime = (date) => {
-        if (!date) return '-';
-        return format(new Date(date), 'dd/MM/yyyy HH:mm', { locale: vi });
-    };
-
-    const formatCurrency = (amount) => {
-        return new Intl.NumberFormat('vi-VN', {
-            style: 'currency',
-            currency: 'VND'
-        }).format(amount);
-    };
-
-    const getOrderNotifications = (orderId) => {
-        return notifications.filter(n => n.order_id === orderId);
-    };
-
-    const removeNotification = (id) => {
-        setNotifications(prev => prev.filter(n => n.id !== id));
-    };
-
-    if (loading) return <div className="loading">Đang tải...</div>;
-    if (error) return <div className="error">Lỗi: {error}</div>;
+    if (error) {
+        return <div className="error">Lỗi: {error}</div>;
+    }
 
     return (
-        <div className="card">
-            <div className="card-header">
-                Bảng tổng hợp đơn hàng
-            </div>
-            <div className="card-body">
-                {/* Global notifications */}
+        <div className="order-summary-container">
+            <div className="header">
+                <h2>Tổng Quan Đơn Hàng</h2>
+
+                {/* Notifications */}
                 {notifications.length > 0 && (
-                    <div className="notifications-panel">
-                        <h4>Thông báo cập nhật lịch</h4>
-                        {notifications.map(notification => (
-                            <div key={notification.id} className="notification-item">
+                    <div className="notifications-container">
+                        {notifications.slice(0, 3).map(notification => (
+                            <div key={notification.id} className="notification">
+                                <span className="notification-message">{notification.message}</span>
                                 <span className="notification-time">
-                                    {formatDateTime(notification.timestamp)}
+                                    {format(new Date(notification.timestamp), 'HH:mm')}
                                 </span>
-                                <span className="notification-message">
-                                    {notification.message}
-                                </span>
-                                <button
-                                    onClick={() => removeNotification(notification.id)}
-                                    className="close-btn"
-                                >
-                                    ×
-                                </button>
                             </div>
                         ))}
                     </div>
                 )}
+            </div>
 
-                <div style={{ overflowX: 'auto' }}>
-                    <table className="table">
+            <div className="content">
+                <div className="table-container">
+                    <table>
                         <thead>
                         <tr>
-                            <th>Mã đơn</th>
+                            <th>Mã ĐH</th>
                             <th>Khách hàng</th>
-                            <th>Ngày sinh</th>
-                            <th>Số điện thoại</th>
-                            <th>Cơ quan/Người giới thiệu</th>
                             <th>Sản phẩm</th>
-                            <th>Số lượng</th>
-                            <th>Giá tiền</th>
-                            <th>Tình trạng vải</th>
-                            <th>Mức độ ưu tiên</th>
-                            <th>Ngày nhận</th>
-                            <th>Ngày hẹn thử</th>
-                            <th>Ngày thử thực tế</th>
-                            <th>Ngày hẹn lấy/Ngày lấy thực tế</th>
-                            <th>Làm thêm giờ</th>
+                            <th>Ngày đặt</th>
+                            <th>Ưu tiên</th>
+                            <th>Ngày thử phôi</th>
+                            <th>Ngày lấy hàng</th>
+                            <th>Giá trị</th>
+                            <th>Làm thêm</th>
                             <th>Trạng thái</th>
-                            <th>Cập nhật</th>
+                            <th>Ghi chú</th>
                         </tr>
                         </thead>
                         <tbody>
-                        {orders.map((order) => {
+                        {orders.map(order => {
                             const schedule = order.production_schedule?.[0];
-                            const orderNotifications = getOrderNotifications(order.id);
-                            const isUrgent = order.priority === 'urgent';
+                            const orderNotifications = notifications.filter(n => n.order_id === order.id);
 
                             return (
-                                <tr key={order.id} className={orderNotifications.length > 0 ? 'has-notification' : ''}>
-                                    <td>{order.id.slice(0, 8)}...</td>
-                                    <td>{order.customers?.name}</td>
-                                    <td>{formatDate(order.customers?.birth_date)}</td>
-                                    <td>{order.customers?.phone}</td>
+                                <tr key={order.id}>
+                                    <td>#{order.id.slice(0, 8)}</td>
                                     <td>
-                                        {order.customers?.organization && (
-                                            <div>{order.customers.organization}</div>
-                                        )}
-                                        {order.customers?.referrer && (
-                                            <div><small>GT: {order.customers.referrer}</small></div>
-                                        )}
+                                        <div className="customer-info">
+                                            <strong>{order.customers?.name}</strong>
+                                            {order.customers?.phone && (
+                                                <span className="phone">{order.customers.phone}</span>
+                                            )}
+                                        </div>
                                     </td>
                                     <td>
                                         {order.order_items?.map((item, idx) => (
-                                            <div key={idx}>{item.products?.name}</div>
+                                            <div key={idx} className="product-item">
+                                                {item.products?.name || item.notes || 'Sản phẩm'} x{item.quantity}
+                                            </div>
                                         ))}
                                     </td>
+                                    <td>{format(new Date(order.order_date), 'dd/MM/yyyy')}</td>
                                     <td>
-                                        {order.order_items?.map((item, idx) => (
-                                            <div key={idx}>{item.quantity}</div>
-                                        ))}
-                                    </td>
-                                    <td>{formatCurrency(order.total_price || 0)}</td>
-                                    <td>
-                                            <span className={`status-badge ${order.material_status === 'need_order' ? 'status-urgent' : 'status-normal'}`}>
-                                                {order.material_status === 'need_order' ? 'Cần đặt vải' : 'Có sẵn'}
-                                            </span>
+                                        <span className={`status-badge ${getPriorityColor(order.priority)}`}>
+                                            {order.priority === 'urgent' ? 'Khẩn cấp' : 'Thường'}
+                                        </span>
                                     </td>
                                     <td>
-                                            <span className={`status-badge ${getPriorityColor(order.priority)}`}>
-                                                {isUrgent ? 'GẤP' : 'THƯỜNG'}
-                                            </span>
-                                    </td>
-                                    <td>{formatDate(order.order_date)}</td>
-                                    <td>{formatDate(schedule?.scheduled_fitting_date)}</td>
-                                    <td>
+                                        {schedule?.scheduled_fitting_date &&
+                                            format(new Date(schedule.scheduled_fitting_date), 'dd/MM/yyyy')}
                                         {schedule?.actual_fitting_date && (
-                                            <span className={
-                                                new Date(schedule.actual_fitting_date).getTime() !==
-                                                new Date(schedule.scheduled_fitting_date).getTime()
-                                                    ? 'date-changed' : ''
-                                            }>
-                                                    {formatDate(schedule.actual_fitting_date)}
-                                                </span>
+                                            <div className="actual-date">
+                                                Thực tế: {format(new Date(schedule.actual_fitting_date), 'dd/MM')}
+                                            </div>
                                         )}
                                     </td>
                                     <td>
-                                        {isUrgent ? (
-                                            // For URGENT orders, show actual delivery date
-                                            <div>
-                                                <strong>Ngày lấy thực tế:</strong>
-                                                <br />
-                                                <span className="urgent-delivery">
-                                                        {formatDate(order.actual_delivery_date)}
-                                                    </span>
-                                            </div>
-                                        ) : (
-                                            // For REGULAR orders, show scheduled pickup date
-                                            <div>
-                                                <div>Hẹn: {formatDate(schedule?.scheduled_pickup_date)}</div>
-                                                {schedule?.actual_pickup_date && (
-                                                    <div>Thực tế: {formatDate(schedule.actual_pickup_date)}</div>
-                                                )}
+                                        {schedule?.scheduled_pickup_date &&
+                                            format(new Date(schedule.scheduled_pickup_date), 'dd/MM/yyyy')}
+                                        {schedule?.actual_pickup_date && (
+                                            <div className="actual-date">
+                                                Thực tế: {format(new Date(schedule.actual_pickup_date), 'dd/MM')}
                                             </div>
                                         )}
                                     </td>
+                                    <td>{order.total_price?.toLocaleString()}đ</td>
                                     <td>
                                         {schedule?.requires_overtime && (
                                             <span className="status-badge status-warning">
-                                                    {schedule.overtime_hours} giờ
-                                                </span>
-                                        )}
-                                    </td>
-                                    <td>
-                                            <span className={`status-badge ${getStatusColor(order.status)}`}>
-                                                {order.status === 'pending' && 'Chờ xử lý'}
-                                                {order.status === 'in_progress' && 'Đang thực hiện'}
-                                                {order.status === 'completed' && 'Hoàn thành'}
+                                                {schedule.overtime_hours} giờ
                                             </span>
+                                        )}
                                     </td>
                                     <td>
-                                        {schedule?.adjustment_reason && (
-                                            <div className="adjustment-notification">
-                                                <span className="notification-icon">📝</span>
-                                                <span className="adjustment-text" title={schedule.adjustment_reason}>
-                                                        {schedule.adjustment_reason}
-                                                    </span>
-                                            </div>
-                                        )}
+                                        <span className={`status-badge ${getStatusColor(order.status)}`}>
+                                            {order.status === 'pending' && 'Chờ xử lý'}
+                                            {order.status === 'in_progress' && 'Đang thực hiện'}
+                                            {order.status === 'completed' && 'Hoàn thành'}
+                                        </span>
+                                    </td>
+                                    <td>
                                         {orderNotifications.length > 0 && (
                                             <div className="order-notifications">
                                                 {orderNotifications.map(n => (
