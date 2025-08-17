@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { addDays, isSunday, format } from 'date-fns';
+import { addDays, isSunday, format, differenceInDays } from 'date-fns';
 import { vi } from 'date-fns/locale';
 
 const NewOrder = () => {
@@ -8,6 +8,7 @@ const NewOrder = () => {
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
     const [calculatedDates, setCalculatedDates] = useState(null);
+    const [employeeSchedules, setEmployeeSchedules] = useState([]);
 
     // Form state
     const [formData, setFormData] = useState({
@@ -20,7 +21,7 @@ const NewOrder = () => {
 
         // Order info
         priority: 'normal',
-        specifiedPickupDate: '',
+        specifiedPickupDate: '', // For URGENT orders - this is the actual delivery date
         materialStatus: 'available',
         totalPrice: 0,
 
@@ -30,6 +31,7 @@ const NewOrder = () => {
 
     useEffect(() => {
         fetchProducts();
+        fetchEmployeeSchedules();
     }, []);
 
     useEffect(() => {
@@ -52,6 +54,39 @@ const NewOrder = () => {
         }
     };
 
+    const fetchEmployeeSchedules = async () => {
+        try {
+            // Fetch employee schedules for the next 30 days to check for days off
+            const today = new Date();
+            const endDate = addDays(today, 30);
+
+            const { data, error } = await supabase
+                .from('employee_schedule')
+                .select('*')
+                .gte('date', format(today, 'yyyy-MM-dd'))
+                .lte('date', format(endDate, 'yyyy-MM-dd'))
+                .eq('is_working', false);
+
+            if (error) throw error;
+            setEmployeeSchedules(data || []);
+        } catch (error) {
+            console.error('Error fetching employee schedules:', error);
+        }
+    };
+
+    const isWorkingDay = (date) => {
+        // Check if it's Sunday
+        if (isSunday(date)) return false;
+
+        // Check if it's a scheduled day off
+        const dateStr = format(date, 'yyyy-MM-dd');
+        const isDayOff = employeeSchedules.some(schedule =>
+            schedule.date === dateStr && !schedule.is_working
+        );
+
+        return !isDayOff;
+    };
+
     const calculateWorkingDays = (startDate, days) => {
         let currentDate = new Date(startDate);
         let workingDaysAdded = 0;
@@ -59,9 +94,25 @@ const NewOrder = () => {
         while (workingDaysAdded < days) {
             currentDate = addDays(currentDate, 1);
 
-            // Skip Sundays (assuming Sunday is day off)
-            if (!isSunday(currentDate)) {
+            // Check if it's a working day
+            if (isWorkingDay(currentDate)) {
                 workingDaysAdded++;
+            }
+        }
+
+        return currentDate;
+    };
+
+    const calculateWorkingDaysBackward = (endDate, days) => {
+        let currentDate = new Date(endDate);
+        let workingDaysSubtracted = 0;
+
+        while (workingDaysSubtracted < days) {
+            currentDate = addDays(currentDate, -1);
+
+            // Check if it's a working day
+            if (isWorkingDay(currentDate)) {
+                workingDaysSubtracted++;
             }
         }
 
@@ -79,43 +130,68 @@ const NewOrder = () => {
             if (error) throw error;
 
             const today = new Date();
-            let startDate = today;
-
-            // If material needs to be ordered, add 5 days
-            if (formData.materialStatus === 'need_order') {
-                startDate = calculateWorkingDays(today, 5);
-            }
-
-            // Calculate based on current workload
-            const sewingDays = 1; // 1 day for sewing 50%
-            const fittingDays = 0.5; // Half day for fitting
-            const finishingDays = 0.5; // Half day for finishing
-
-            // Check if product needs decoration
             const selectedProduct = products.find(p => p.id === formData.orderItems[0].productId);
-            const needsDecoration = selectedProduct?.type === 'shirt'; // Assuming shirts need decoration
+            const needsDecoration = selectedProduct?.type === 'shirt';
 
-            let productionDays = sewingDays;
-            if (needsDecoration) {
-                productionDays += 1; // 1 day for decoration
-            }
+            let fittingDate, pickupDate, requiresOvertime = false, overtimeHours = 0;
 
-            // Calculate fitting date (after sewing 50%)
-            const fittingDate = calculateWorkingDays(startDate, sewingDays);
-
-            // Calculate pickup date
-            let pickupDate;
             if (formData.priority === 'urgent' && formData.specifiedPickupDate) {
-                pickupDate = new Date(formData.specifiedPickupDate);
+                // URGENT order - work backward from actual delivery date
+                const actualDeliveryDate = new Date(formData.specifiedPickupDate);
+
+                // Calculate required production days
+                const finishingDays = 0.5;
+                const decorationDays = needsDecoration ? 1 : 0;
+                const totalFinishingDays = finishingDays + decorationDays;
+
+                // Work backward from delivery date
+                fittingDate = calculateWorkingDaysBackward(actualDeliveryDate, totalFinishingDays);
+
+                // Calculate if overtime is needed
+                const availableWorkingDays = [];
+                let checkDate = new Date(today);
+                while (checkDate <= actualDeliveryDate) {
+                    if (isWorkingDay(checkDate)) {
+                        availableWorkingDays.push(checkDate);
+                    }
+                    checkDate = addDays(checkDate, 1);
+                }
+
+                const requiredDays = 1.5 + (needsDecoration ? 1 : 0); // Sewing + finishing + decoration
+                if (availableWorkingDays.length < requiredDays) {
+                    requiresOvertime = true;
+                    overtimeHours = Math.ceil((requiredDays - availableWorkingDays.length) * 8); // 8 hours per day
+                }
+
+                pickupDate = actualDeliveryDate;
+
             } else {
-                pickupDate = calculateWorkingDays(fittingDate, finishingDays + (needsDecoration ? 1 : 0));
+                // REGULAR order - work forward from today
+                let startDate = today;
+
+                // If material needs to be ordered, add 5 working days
+                if (formData.materialStatus === 'need_order') {
+                    startDate = calculateWorkingDays(today, 5);
+                }
+
+                // Calculate based on current workload
+                const sewingDays = 1; // 1 day for sewing 50%
+                const finishingDays = 0.5; // Half day for finishing
+                const decorationDays = needsDecoration ? 1 : 0;
+
+                // Calculate fitting date (after sewing 50%)
+                fittingDate = calculateWorkingDays(startDate, sewingDays);
+
+                // Calculate pickup date
+                pickupDate = calculateWorkingDays(fittingDate, finishingDays + decorationDays);
             }
 
             setCalculatedDates({
                 fittingDate,
                 pickupDate,
-                requiresOvertime: formData.priority === 'urgent',
-                productionDays
+                requiresOvertime,
+                overtimeHours,
+                productionDays: differenceInDays(pickupDate, today)
             });
 
         } catch (error) {
@@ -184,17 +260,23 @@ const NewOrder = () => {
 
             if (customerError) throw customerError;
 
-            // Create order
+            // Create order with actual_delivery_date for URGENT orders
+            const orderData = {
+                customer_id: customer.id,
+                priority: formData.priority,
+                material_status: formData.materialStatus,
+                total_price: formData.totalPrice,
+                status: 'pending'
+            };
+
+            // For URGENT orders, store the actual delivery date
+            if (formData.priority === 'urgent' && formData.specifiedPickupDate) {
+                orderData.actual_delivery_date = formData.specifiedPickupDate;
+            }
+
             const { data: order, error: orderError } = await supabase
                 .from('orders')
-                .insert({
-                    customer_id: customer.id,
-                    priority: formData.priority,
-                    specified_pickup_date: formData.specifiedPickupDate || null,
-                    material_status: formData.materialStatus,
-                    total_price: formData.totalPrice,
-                    status: 'pending'
-                })
+                .insert(orderData)
                 .select()
                 .single();
 
@@ -217,16 +299,23 @@ const NewOrder = () => {
 
             // Create production schedule
             for (const item of orderItems) {
+                const scheduleData = {
+                    order_id: order.id,
+                    order_item_id: item.id,
+                    scheduled_fitting_date: calculatedDates?.fittingDate,
+                    status: formData.materialStatus === 'need_order' ? 'waiting_material' : 'sewing',
+                    requires_overtime: calculatedDates?.requiresOvertime || false,
+                    overtime_hours: calculatedDates?.overtimeHours || 0
+                };
+
+                // Only add scheduled_pickup_date for REGULAR orders
+                if (formData.priority === 'normal') {
+                    scheduleData.scheduled_pickup_date = calculatedDates?.pickupDate;
+                }
+
                 const { error: scheduleError } = await supabase
                     .from('production_schedule')
-                    .insert({
-                        order_id: order.id,
-                        order_item_id: item.id,
-                        scheduled_fitting_date: calculatedDates?.fittingDate,
-                        scheduled_pickup_date: calculatedDates?.pickupDate,
-                        status: formData.materialStatus === 'need_order' ? 'waiting_material' : 'sewing',
-                        requires_overtime: calculatedDates?.requiresOvertime || false
-                    });
+                    .insert(scheduleData);
 
                 if (scheduleError) throw scheduleError;
             }
@@ -295,221 +384,240 @@ const NewOrder = () => {
 
                 <form onSubmit={handleSubmit}>
                     {/* Customer Information */}
-                    <h3>Thông tin khách hàng</h3>
-                    <div className="form-row">
-                        <div className="form-group">
-                            <label className="form-label">Tên khách hàng *</label>
-                            <input
-                                type="text"
-                                name="customerName"
-                                value={formData.customerName}
-                                onChange={handleInputChange}
-                                className="form-input"
-                                required
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">Ngày sinh</label>
-                            <input
-                                type="date"
-                                name="birthDate"
-                                value={formData.birthDate}
-                                onChange={handleInputChange}
-                                className="form-input"
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">Số điện thoại</label>
-                            <input
-                                type="tel"
-                                name="phone"
-                                value={formData.phone}
-                                onChange={handleInputChange}
-                                className="form-input"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="form-row">
-                        <div className="form-group">
-                            <label className="form-label">Cơ quan</label>
-                            <input
-                                type="text"
-                                name="organization"
-                                value={formData.organization}
-                                onChange={handleInputChange}
-                                className="form-input"
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">Người giới thiệu</label>
-                            <input
-                                type="text"
-                                name="referrer"
-                                value={formData.referrer}
-                                onChange={handleInputChange}
-                                className="form-input"
-                            />
-                        </div>
-                    </div>
-
-                    {/* Order Information */}
-                    <h3>Thông tin đơn hàng</h3>
-                    <div className="form-row">
-                        <div className="form-group">
-                            <label className="form-label">Mức độ ưu tiên</label>
-                            <select
-                                name="priority"
-                                value={formData.priority}
-                                onChange={handleInputChange}
-                                className="form-select"
-                            >
-                                <option value="normal">Hàng thường</option>
-                                <option value="urgent">Hàng gấp</option>
-                            </select>
-                        </div>
-                        <div className="form-group">
-                            <label className="form-label">Tình trạng vải</label>
-                            <select
-                                name="materialStatus"
-                                value={formData.materialStatus}
-                                onChange={handleInputChange}
-                                className="form-select"
-                            >
-                                <option value="available">Có sẵn</option>
-                                <option value="need_order">Cần đặt vải</option>
-                            </select>
-                        </div>
-                        {formData.priority === 'urgent' && (
+                    <div className="form-section">
+                        <h3>Thông tin khách hàng</h3>
+                        <div className="form-grid">
                             <div className="form-group">
-                                <label className="form-label">Ngày chỉ định lấy hàng</label>
+                                <label>Tên khách hàng *</label>
+                                <input
+                                    type="text"
+                                    name="customerName"
+                                    value={formData.customerName}
+                                    onChange={handleInputChange}
+                                    required
+                                    className="form-input"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Ngày sinh</label>
                                 <input
                                     type="date"
-                                    name="specifiedPickupDate"
-                                    value={formData.specifiedPickupDate}
+                                    name="birthDate"
+                                    value={formData.birthDate}
                                     onChange={handleInputChange}
                                     className="form-input"
                                 />
                             </div>
-                        )}
+                            <div className="form-group">
+                                <label>Số điện thoại *</label>
+                                <input
+                                    type="tel"
+                                    name="phone"
+                                    value={formData.phone}
+                                    onChange={handleInputChange}
+                                    required
+                                    className="form-input"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Cơ quan</label>
+                                <input
+                                    type="text"
+                                    name="organization"
+                                    value={formData.organization}
+                                    onChange={handleInputChange}
+                                    className="form-input"
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label>Người giới thiệu</label>
+                                <input
+                                    type="text"
+                                    name="referrer"
+                                    value={formData.referrer}
+                                    onChange={handleInputChange}
+                                    className="form-input"
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Order Information */}
+                    <div className="form-section">
+                        <h3>Thông tin đơn hàng</h3>
+                        <div className="form-grid">
+                            <div className="form-group">
+                                <label>Mức độ ưu tiên *</label>
+                                <select
+                                    name="priority"
+                                    value={formData.priority}
+                                    onChange={handleInputChange}
+                                    className="form-select"
+                                >
+                                    <option value="normal">Thường (REGULAR)</option>
+                                    <option value="urgent">Gấp (URGENT)</option>
+                                </select>
+                            </div>
+
+                            {/* Only show delivery date field for URGENT orders */}
+                            {formData.priority === 'urgent' && (
+                                <div className="form-group">
+                                    <label>Ngày lấy hàng thực tế (khách yêu cầu) *</label>
+                                    <input
+                                        type="date"
+                                        name="specifiedPickupDate"
+                                        value={formData.specifiedPickupDate}
+                                        onChange={handleInputChange}
+                                        required={formData.priority === 'urgent'}
+                                        className="form-input"
+                                        min={format(new Date(), 'yyyy-MM-dd')}
+                                    />
+                                    <small className="form-hint">
+                                        Đây là ngày khách hàng yêu cầu lấy hàng cho đơn GẤP
+                                    </small>
+                                </div>
+                            )}
+
+                            <div className="form-group">
+                                <label>Tình trạng vải *</label>
+                                <select
+                                    name="materialStatus"
+                                    value={formData.materialStatus}
+                                    onChange={handleInputChange}
+                                    className="form-select"
+                                >
+                                    <option value="available">Có sẵn</option>
+                                    <option value="need_order">Cần đặt vải</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Order Items */}
-                    <h3>Sản phẩm</h3>
-                    {formData.orderItems.map((item, index) => (
-                        <div key={index} className="form-row" style={{ alignItems: 'end' }}>
-                            <div className="form-group">
-                                <label className="form-label">Sản phẩm</label>
-                                <select
-                                    value={item.productId}
-                                    onChange={(e) => handleOrderItemChange(index, 'productId', e.target.value)}
-                                    className="form-select"
-                                    required
-                                >
-                                    <option value="">Chọn sản phẩm</option>
-                                    {products.map(product => (
-                                        <option key={product.id} value={product.id}>
-                                            {product.name}
-                                        </option>
-                                    ))}
-                                </select>
+                    <div className="form-section">
+                        <h3>Sản phẩm</h3>
+                        {formData.orderItems.map((item, index) => (
+                            <div key={index} className="order-item">
+                                <div className="form-grid">
+                                    <div className="form-group">
+                                        <label>Sản phẩm *</label>
+                                        <select
+                                            value={item.productId}
+                                            onChange={(e) => handleOrderItemChange(index, 'productId', e.target.value)}
+                                            required
+                                            className="form-select"
+                                        >
+                                            <option value="">Chọn sản phẩm</option>
+                                            {products.map(product => (
+                                                <option key={product.id} value={product.id}>
+                                                    {product.name} - {product.type}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Số lượng *</label>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            value={item.quantity}
+                                            onChange={(e) => handleOrderItemChange(index, 'quantity', parseInt(e.target.value))}
+                                            required
+                                            className="form-input"
+                                        />
+                                    </div>
+                                    <div className="form-group">
+                                        <label>Đơn giá *</label>
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            value={item.unitPrice}
+                                            onChange={(e) => handleOrderItemChange(index, 'unitPrice', parseFloat(e.target.value))}
+                                            required
+                                            className="form-input"
+                                        />
+                                    </div>
+                                    {formData.orderItems.length > 1 && (
+                                        <div className="form-group">
+                                            <button
+                                                type="button"
+                                                onClick={() => removeOrderItem(index)}
+                                                className="btn btn-danger"
+                                            >
+                                                Xóa
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            <div className="form-group">
-                                <label className="form-label">Số lượng</label>
-                                <input
-                                    type="number"
-                                    value={item.quantity}
-                                    onChange={(e) => handleOrderItemChange(index, 'quantity', parseInt(e.target.value))}
-                                    className="form-input"
-                                    min="1"
-                                    required
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">Đơn giá</label>
-                                <input
-                                    type="number"
-                                    value={item.unitPrice}
-                                    onChange={(e) => handleOrderItemChange(index, 'unitPrice', parseFloat(e.target.value))}
-                                    className="form-input"
-                                    min="0"
-                                    step="1000"
-                                />
-                            </div>
-                            <div className="form-group">
-                                {formData.orderItems.length > 1 && (
-                                    <button
-                                        type="button"
-                                        onClick={() => removeOrderItem(index)}
-                                        className="btn btn-danger"
-                                    >
-                                        Xóa
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    ))}
-
-                    <div style={{ marginBottom: '20px' }}>
-                        <button type="button" onClick={addOrderItem} className="btn btn-primary">
+                        ))}
+                        <button
+                            type="button"
+                            onClick={addOrderItem}
+                            className="btn btn-secondary"
+                        >
                             Thêm sản phẩm
                         </button>
                     </div>
 
-                    <div className="form-group">
-                        <label className="form-label">Tổng tiền: {formatCurrency(formData.totalPrice)}</label>
-                    </div>
-
-                    {/* Calculated Schedule */}
+                    {/* Calculated Information */}
                     {calculatedDates && (
-                        <div className="card" style={{ backgroundColor: '#f8f9fa', margin: '20px 0' }}>
-                            <div className="card-header">
-                                Lịch sản xuất dự kiến
-                            </div>
-                            <div className="card-body">
-                                <div className="form-row">
-                                    <div className="form-group">
-                                        <label className="form-label">Ngày hẹn thử phôi</label>
-                                        <input
-                                            type="text"
-                                            value={formatDate(calculatedDates.fittingDate)}
-                                            className="form-input"
-                                            readOnly
-                                        />
+                        <div className="form-section calculated-info">
+                            <h3>Thông tin tính toán</h3>
+                            <div className="info-grid">
+                                <div className="info-item">
+                                    <label>Tổng tiền:</label>
+                                    <span>{formatCurrency(formData.totalPrice)}</span>
+                                </div>
+                                <div className="info-item">
+                                    <label>Ngày hẹn thử phôi:</label>
+                                    <span>{formatDate(calculatedDates.fittingDate)}</span>
+                                </div>
+
+                                {formData.priority === 'normal' && (
+                                    <div className="info-item">
+                                        <label>Ngày hẹn lấy hàng (tự động tính):</label>
+                                        <span>{formatDate(calculatedDates.pickupDate)}</span>
                                     </div>
-                                    <div className="form-group">
-                                        <label className="form-label">Ngày hẹn lấy hàng</label>
-                                        <input
-                                            type="text"
-                                            value={formatDate(calculatedDates.pickupDate)}
-                                            className="form-input"
-                                            readOnly
-                                        />
-                                    </div>
-                                    <div className="form-group">
-                                        <label className="form-label">Thông tin thêm</label>
-                                        <div>
-                                            {calculatedDates.requiresOvertime && (
-                                                <span className="status-badge status-warning">Cần làm thêm giờ</span>
-                                            )}
-                                            {formData.materialStatus === 'need_order' && (
-                                                <span className="status-badge status-urgent">Chờ đặt vải (5 ngày)</span>
-                                            )}
+                                )}
+
+                                {formData.priority === 'urgent' && (
+                                    <>
+                                        <div className="info-item">
+                                            <label>Yêu cầu làm thêm giờ:</label>
+                                            <span className={calculatedDates.requiresOvertime ? 'text-danger' : 'text-success'}>
+                                                {calculatedDates.requiresOvertime ? `Có (${calculatedDates.overtimeHours} giờ)` : 'Không'}
+                                            </span>
                                         </div>
-                                    </div>
+                                        <div className="info-item">
+                                            <label>Ngày lấy hàng thực tế:</label>
+                                            <span className="text-urgent">{formatDate(calculatedDates.pickupDate)}</span>
+                                        </div>
+                                    </>
+                                )}
+
+                                <div className="info-item">
+                                    <label>Số ngày sản xuất:</label>
+                                    <span>{calculatedDates.productionDays} ngày</span>
                                 </div>
                             </div>
+
+                            {formData.priority === 'urgent' && calculatedDates.requiresOvertime && (
+                                <div className="alert alert-warning">
+                                    <strong>Lưu ý:</strong> Đơn hàng này yêu cầu nhân viên làm thêm giờ ({calculatedDates.overtimeHours} giờ) để hoàn thành đúng hạn.
+                                </div>
+                            )}
                         </div>
                     )}
 
-                    <div style={{ textAlign: 'center', marginTop: '30px' }}>
+                    {/* Submit Button */}
+                    <div className="form-actions">
                         <button
                             type="submit"
-                            className="btn btn-success"
-                            disabled={loading || !formData.customerName || formData.orderItems[0].productId === ''}
-                            style={{ minWidth: '200px' }}
+                            disabled={loading || !formData.customerName || !formData.phone || formData.orderItems.length === 0}
+                            className="btn btn-primary"
                         >
-                            {loading ? 'Đang tạo...' : 'Tạo đơn hàng'}
+                            {loading ? 'Đang xử lý...' : 'Tạo đơn hàng'}
                         </button>
                     </div>
                 </form>
