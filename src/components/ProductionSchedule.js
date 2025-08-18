@@ -1,239 +1,122 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { format, addDays, isSunday, differenceInDays } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import { format } from 'date-fns';
 
-const ProductionSchedule = () => {
-    const [schedules, setSchedules] = useState([]);
+const OrderSummary = () => {
+    const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [notifications, setNotifications] = useState([]);
 
-    const fetchSchedules = async () => {
+    // Service type labels for display
+    const serviceTypeLabels = {
+        'may_ao_dai': 'May Áo Dài',
+        'may_ao_cuoi': 'May Áo Cưới',
+        'may_vest': 'May Vest',
+        'may_dam': 'May Đầm',
+        'sua_chua': 'Sửa Chữa',
+        'khac': 'Khác'
+    };
+
+    const handleScheduleUpdate = useCallback((payload) => {
+        // Add notification when schedule is updated
+        setNotifications(prev => [...prev, {
+            id: Date.now(),
+            order_id: payload.new.order_id,
+            message: 'Lịch sản xuất đã được cập nhật',
+            timestamp: new Date(),
+            type: 'schedule_update'
+        }]);
+
+        // Refresh orders to show updated dates
+        fetchOrders();
+    }, []);
+
+    const fetchOrders = async () => {
         try {
             setLoading(true);
 
+            // UPDATED: Removed products join, using service_type directly
             const { data, error } = await supabase
-                .from('production_schedule')
+                .from('orders')
                 .select(`
                     *,
-                    orders (
-                        id,
-                        order_date,
-                        priority,
-                        actual_delivery_date,
-                        customers (
-                            name
-                        )
+                    customers (
+                        name,
+                        phone,
                     ),
                     order_items (
+                        id,
+                        service_type,
                         quantity,
-                        notes,
-                        products (
-                            name,
-                            type
-                        )
+                        price,
+                        notes
+                    ),
+                    production_schedule (
+                        scheduled_fitting_date,
+                        scheduled_pickup_date,
+                        actual_fitting_date,
+                        actual_pickup_date,
+                        status,
+                        requires_overtime,
+                        overtime_hours
                     )
                 `)
-                .order('scheduled_fitting_date', { ascending: true });
+                .order('created_at', { ascending: false });
 
             if (error) throw error;
 
-            setSchedules(data || []);
+            setOrders(data || []);
         } catch (error) {
-            console.error('Error fetching schedules:', error);
+            console.error('Error fetching orders:', error);
             setError(error.message);
         } finally {
             setLoading(false);
         }
     };
 
-    const calculateNextWorkingDay = async (date) => {
-        let nextDay = addDays(date, 1);
-
-        // Check employee schedule to find next working day
-        while (true) {
-            if (!isSunday(nextDay)) {
-                const { data: daySchedule } = await supabase
-                    .from('employee_schedule')
-                    .select('is_working')
-                    .eq('date', format(nextDay, 'yyyy-MM-dd'))
-                    .single();
-
-                if (!daySchedule || daySchedule.is_working !== false) {
-                    break;
-                }
-            }
-            nextDay = addDays(nextDay, 1);
-        }
-
-        return format(nextDay, 'yyyy-MM-dd');
-    };
-
-    // Wrap adjustSchedulesForDayOff in useCallback to prevent infinite re-renders
-    const adjustSchedulesForDayOff = useCallback(async (offDate) => {
-        try {
-            // Fetch schedules that might be affected by this day off
-            const { data: affectedSchedules, error } = await supabase
-                .from('production_schedule')
-                .select('*')
-                .or(`scheduled_fitting_date.eq.${offDate},scheduled_pickup_date.eq.${offDate}`);
-
-            if (error) throw error;
-
-            // Adjust each affected schedule by moving to next working day
-            for (const schedule of affectedSchedules) {
-                let updates = {};
-
-                if (schedule.scheduled_fitting_date === offDate) {
-                    updates.scheduled_fitting_date = await calculateNextWorkingDay(new Date(offDate));
-                }
-
-                if (schedule.scheduled_pickup_date === offDate) {
-                    updates.scheduled_pickup_date = await calculateNextWorkingDay(new Date(offDate));
-                }
-
-                if (Object.keys(updates).length > 0) {
-                    await supabase
-                        .from('production_schedule')
-                        .update(updates)
-                        .eq('id', schedule.id);
-                }
-            }
-
-            // Refresh schedules
-            fetchSchedules();
-        } catch (error) {
-            console.error('Error adjusting schedules for day off:', error);
-        }
-    }, []); // Empty dependency array since it doesn't depend on any props or state
-
-    const handleEmployeeScheduleChange = useCallback(async (payload) => {
-        // When employee schedule changes, check if we need to adjust production schedules
-        if (payload.new && !payload.new.is_working && !isSunday(new Date(payload.new.date))) {
-            // Employee is off on a non-Sunday, adjust affected schedules
-            await adjustSchedulesForDayOff(payload.new.date);
-            setNotifications(prev => [...prev, {
-                id: Date.now(),
-                message: `Lịch sản xuất đã được điều chỉnh do nhân viên nghỉ ngày ${format(new Date(payload.new.date), 'dd/MM/yyyy', { locale: vi })}`,
-                type: 'warning'
-            }]);
-        }
-    }, [adjustSchedulesForDayOff]);
-
     useEffect(() => {
-        fetchSchedules();
-    }, []);
+        fetchOrders();
 
-    useEffect(() => {
-        // Subscribe to employee schedule changes
+        // Subscribe to production schedule changes for notifications
         const subscription = supabase
-            .channel('employee-schedule-changes')
+            .channel('production-updates')
             .on('postgres_changes',
-                { event: '*', schema: 'public', table: 'employee_schedule' },
-                handleEmployeeScheduleChange
+                { event: 'UPDATE', schema: 'public', table: 'production_schedule' },
+                handleScheduleUpdate
             )
             .subscribe();
 
         return () => {
             subscription.unsubscribe();
         };
-    }, [handleEmployeeScheduleChange]);
-
-    const updateActualDate = async (scheduleId, field, value) => {
-        try {
-            const schedule = schedules.find(s => s.id === scheduleId);
-            const updates = { [field]: value };
-
-            // Auto-update delivery date for REGULAR orders when actual fitting date changes
-            if (field === 'actual_fitting_date' && schedule.orders?.priority === 'normal') {
-                const scheduledFittingDate = new Date(schedule.scheduled_fitting_date);
-                const actualFittingDate = new Date(value);
-
-                if (actualFittingDate.getTime() !== scheduledFittingDate.getTime()) {
-                    // Calculate the difference in days
-                    const daysDifference = differenceInDays(actualFittingDate, scheduledFittingDate);
-
-                    // Adjust the scheduled pickup date accordingly
-                    const originalPickupDate = new Date(schedule.scheduled_pickup_date);
-                    const newPickupDate = addDays(originalPickupDate, daysDifference);
-
-                    // Make sure it's a working day
-                    updates.scheduled_pickup_date = await calculateNextWorkingDay(newPickupDate);
-
-                    // Add notification
-                    setNotifications(prev => [...prev, {
-                        id: Date.now(),
-                        message: `Ngày hẹn lấy hàng đã được tự động cập nhật cho đơn của ${schedule.orders?.customers?.name}`,
-                        type: 'info'
-                    }]);
-                }
-            }
-
-            const { error } = await supabase
-                .from('production_schedule')
-                .update(updates)
-                .eq('id', scheduleId);
-
-            if (error) throw error;
-
-            // Refresh data
-            fetchSchedules();
-
-            // If pickup date is updated and it's earlier than scheduled, adjust other schedules
-            if (field === 'actual_pickup_date' && value) {
-                const scheduledDate = new Date(schedule.scheduled_pickup_date);
-                const actualDate = new Date(value);
-                if (actualDate < scheduledDate) {
-                    await adjustSchedulesForEarlyPickup(scheduleId, value);
-                }
-            }
-        } catch (error) {
-            console.error('Error updating date:', error);
-            setError(error.message);
-        }
-    };
-
-    const adjustSchedulesForEarlyPickup = async (completedScheduleId, actualPickupDate) => {
-        // This would implement the logic to speed up other schedules
-        // when one is completed early
-        console.log('Adjusting schedules for early pickup:', completedScheduleId, actualPickupDate);
-
-        // Add notification
-        setNotifications(prev => [...prev, {
-            id: Date.now(),
-            message: 'Lịch sản xuất có thể được điều chỉnh do hoàn thành sớm',
-            type: 'success'
-        }]);
-    };
-
-    const updateStatus = async (scheduleId, newStatus) => {
-        try {
-            const { error } = await supabase
-                .from('production_schedule')
-                .update({ status: newStatus })
-                .eq('id', scheduleId);
-
-            if (error) throw error;
-            fetchSchedules();
-        } catch (error) {
-            console.error('Error updating status:', error);
-            setError(error.message);
-        }
-    };
+    }, [handleScheduleUpdate]);
 
     const getStatusColor = (status) => {
         switch (status) {
-            case 'pending': return 'pending';
-            case 'pending_material': return 'pending';
-            case 'in_progress': return 'in-progress';
-            case 'completed': return 'completed';
-            default: return 'pending';
+            case 'pending': return 'status-pending';
+            case 'in_progress': return 'status-in-progress';
+            case 'completed': return 'status-completed';
+            default: return 'status-pending';
         }
     };
 
-    const getPriorityClass = (priority) => {
-        return priority === 'urgent' ? 'urgent' : 'normal';
+    const getPriorityColor = (priority) => {
+        switch (priority) {
+            case 'urgent': return 'status-urgent';
+            case 'normal': return 'status-normal';
+            default: return 'status-normal';
+        }
+    };
+
+    const getStatusLabel = (status) => {
+        switch (status) {
+            case 'pending': return 'Chờ xử lý';
+            case 'in_progress': return 'Đang thực hiện';
+            case 'completed': return 'Hoàn thành';
+            case 'cancelled': return 'Đã hủy';
+            default: return status;
+        }
     };
 
     if (loading) {
@@ -245,116 +128,152 @@ const ProductionSchedule = () => {
     }
 
     return (
-        <div className="production-schedule-container">
-            <div className="header">
-                <h2>Lịch Sản Xuất</h2>
+        <div className="order-summary-container">
+            <h2>Tổng Quan Đơn Hàng</h2>
 
-                {/* Notifications */}
-                {notifications.length > 0 && (
-                    <div className="notifications">
-                        {notifications.slice(-3).map(notification => (
-                            <div key={notification.id} className={`notification ${notification.type}`}>
-                                {notification.message}
-                                <button onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}>
-                                    ×
-                                </button>
-                            </div>
-                        ))}
-                    </div>
+            {/* Notifications */}
+            {notifications.length > 0 && (
+                <div className="notifications">
+                    {notifications.map(notif => (
+                        <div key={notif.id} className="notification">
+                            <span>{notif.message}</span>
+                            <span className="timestamp">
+                                {format(notif.timestamp, 'HH:mm:ss dd/MM/yyyy')}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Orders Table */}
+            <div className="orders-table">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Mã Đơn</th>
+                        <th>Khách Hàng</th>
+                        <th>Loại Dịch Vụ</th>
+                        <th>Số Lượng</th>
+                        <th>Tổng Tiền</th>
+                        <th>Ngày Đặt</th>
+                        <th>Ngày Thử</th>
+                        <th>Ngày Lấy</th>
+                        <th>Trạng Thái</th>
+                        <th>Ưu Tiên</th>
+                        <th>Làm Thêm Giờ</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {orders.map(order => (
+                        <tr key={order.id}>
+                            <td>{order.order_number}</td>
+                            <td>
+                                <div className="customer-info">
+                                    <strong>{order.customers?.name}</strong>
+                                    <span>{order.customers?.phone}</span>
+                                </div>
+                            </td>
+                            <td>
+                                {/* UPDATED: Display service type instead of product */}
+                                <div className="service-info">
+                                    <strong>{serviceTypeLabels[order.service_type] || order.service_type}</strong>
+                                    {order.order_items?.map((item, idx) => (
+                                        <div key={idx} className="service-item">
+                                            {item.service_type !== order.service_type && (
+                                                <span>+ {serviceTypeLabels[item.service_type] || item.service_type}</span>
+                                            )}
+                                            {item.notes && <span className="notes">({item.notes})</span>}
+                                        </div>
+                                    ))}
+                                </div>
+                            </td>
+                            <td>
+                                {order.order_items?.reduce((sum, item) => sum + item.quantity, 0) || 0}
+                            </td>
+                            <td className="amount">
+                                {order.total_amount?.toLocaleString('vi-VN')} VNĐ
+                            </td>
+                            <td>
+                                {order.order_date && format(new Date(order.order_date), 'dd/MM/yyyy')}
+                            </td>
+                            <td>
+                                {order.production_schedule?.[0]?.scheduled_fitting_date && (
+                                    <div>
+                                        <div className="scheduled-date">
+                                            {format(new Date(order.production_schedule[0].scheduled_fitting_date), 'dd/MM/yyyy')}
+                                        </div>
+                                        {order.production_schedule[0].actual_fitting_date && (
+                                            <div className="actual-date">
+                                                Thực tế: {format(new Date(order.production_schedule[0].actual_fitting_date), 'dd/MM/yyyy')}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </td>
+                            <td>
+                                {order.production_schedule?.[0]?.scheduled_pickup_date && (
+                                    <div>
+                                        <div className="scheduled-date">
+                                            {format(new Date(order.production_schedule[0].scheduled_pickup_date), 'dd/MM/yyyy')}
+                                        </div>
+                                        {order.production_schedule[0].actual_pickup_date && (
+                                            <div className="actual-date">
+                                                Thực tế: {format(new Date(order.production_schedule[0].actual_pickup_date), 'dd/MM/yyyy')}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </td>
+                            <td>
+                                    <span className={`status-badge ${getStatusColor(order.status)}`}>
+                                        {getStatusLabel(order.status)}
+                                    </span>
+                            </td>
+                            <td>
+                                    <span className={`priority-badge ${getPriorityColor(order.priority)}`}>
+                                        {order.priority === 'urgent' ? 'Khẩn Cấp' : 'Bình Thường'}
+                                    </span>
+                            </td>
+                            <td>
+                                {order.production_schedule?.[0]?.requires_overtime && (
+                                    <span className="overtime">
+                                            {order.production_schedule[0].overtime_hours} giờ
+                                        </span>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                    </tbody>
+                </table>
+
+                {orders.length === 0 && (
+                    <div className="no-data">Không có đơn hàng nào</div>
                 )}
             </div>
 
-            <div className="card">
-                <div className="card-header">Bảng theo dõi tiến độ</div>
-                <div className="card-body">
-                    <div className="table-responsive">
-                        <table className="table">
-                            <thead>
-                            <tr>
-                                <th>Khách hàng</th>
-                                <th>Sản phẩm</th>
-                                <th>Độ ưu tiên</th>
-                                <th>Ngày thử dự kiến</th>
-                                <th>Ngày thử thực tế</th>
-                                <th>Ngày lấy dự kiến</th>
-                                <th>Ngày lấy thực tế</th>
-                                <th>Trạng thái</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            {schedules.map(schedule => {
-                                const product = schedule.order_items?.products;
-                                const isDelayed = schedule.actual_pickup_date &&
-                                    new Date(schedule.actual_pickup_date) > new Date(schedule.scheduled_pickup_date);
-
-                                return (
-                                    <tr key={schedule.id} className={isDelayed ? 'delayed-row' : ''}>
-                                        <td>{schedule.orders?.customers?.name}</td>
-                                        <td>
-                                            {product?.name || schedule.order_items?.notes || 'N/A'}
-                                            {schedule.order_items?.quantity > 1 && ` x${schedule.order_items.quantity}`}
-                                        </td>
-                                        <td>
-                                                <span className={`status-badge status-${getPriorityClass(schedule.orders?.priority)}`}>
-                                                    {schedule.orders?.priority === 'urgent' ? 'Khẩn cấp' : 'Thường'}
-                                                </span>
-                                        </td>
-                                        <td>
-                                            {schedule.scheduled_fitting_date &&
-                                                format(new Date(schedule.scheduled_fitting_date), 'dd/MM/yyyy')}
-                                        </td>
-                                        <td>
-                                            <input
-                                                type="date"
-                                                value={schedule.actual_fitting_date || ''}
-                                                onChange={(e) => updateActualDate(schedule.id, 'actual_fitting_date', e.target.value)}
-                                                className="date-input"
-                                            />
-                                        </td>
-                                        <td>
-                                            {schedule.scheduled_pickup_date &&
-                                                format(new Date(schedule.scheduled_pickup_date), 'dd/MM/yyyy')}
-                                            {schedule.requires_overtime && (
-                                                <span className="overtime-badge">
-                                                        OT: {schedule.overtime_hours}h
-                                                    </span>
-                                            )}
-                                        </td>
-                                        <td>
-                                            <input
-                                                type="date"
-                                                value={schedule.actual_pickup_date || ''}
-                                                onChange={(e) => updateActualDate(schedule.id, 'actual_pickup_date', e.target.value)}
-                                                className="date-input"
-                                            />
-                                        </td>
-                                        <td>
-                                            <select
-                                                value={schedule.status}
-                                                onChange={(e) => updateStatus(schedule.id, e.target.value)}
-                                                className={`status-select status-${getStatusColor(schedule.status)}`}
-                                            >
-                                                <option value="pending">Chờ xử lý</option>
-                                                <option value="pending_material">Chờ vật liệu</option>
-                                                <option value="in_progress">Đang thực hiện</option>
-                                                <option value="completed">Hoàn thành</option>
-                                            </select>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                            </tbody>
-                        </table>
-                        {schedules.length === 0 && (
-                            <div className="empty-state">
-                                Chưa có lịch sản xuất nào
-                            </div>
-                        )}
-                    </div>
+            {/* Summary Statistics */}
+            <div className="summary-stats">
+                <div className="stat-card">
+                    <h4>Tổng Đơn Hàng</h4>
+                    <p>{orders.length}</p>
+                </div>
+                <div className="stat-card">
+                    <h4>Đang Xử Lý</h4>
+                    <p>{orders.filter(o => o.status === 'in_progress').length}</p>
+                </div>
+                <div className="stat-card">
+                    <h4>Đơn Khẩn Cấp</h4>
+                    <p>{orders.filter(o => o.priority === 'urgent').length}</p>
+                </div>
+                <div className="stat-card">
+                    <h4>Tổng Doanh Thu</h4>
+                    <p>
+                        {orders.reduce((sum, o) => sum + (o.total_amount || 0), 0).toLocaleString('vi-VN')} VNĐ
+                    </p>
                 </div>
             </div>
         </div>
     );
 };
 
-export default ProductionSchedule;
+export default OrderSummary;

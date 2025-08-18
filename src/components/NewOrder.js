@@ -4,24 +4,28 @@ import { addDays, isSunday, format, differenceInDays } from 'date-fns';
 import { vi } from 'date-fns/locale';
 
 const NewOrder = () => {
-    const [products, setProducts] = useState([{
-        id:'1223',
-        name:"Ao dai",
-        type:'ao_dai',
-    }]);
+    // REMOVED products state - no longer needed
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
     const [calculatedDates, setCalculatedDates] = useState(null);
     const [employeeSchedules, setEmployeeSchedules] = useState([]);
 
-    // Form state
+    // Service types to replace products
+    const serviceTypes = [
+        { value: 'may_ao_dai', label: 'May Áo Dài' },
+        { value: 'may_ao_cuoi', label: 'May Áo Cưới' },
+        { value: 'may_vest', label: 'May Vest' },
+        { value: 'may_dam', label: 'May Đầm' },
+        { value: 'sua_chua', label: 'Sửa Chữa' },
+        { value: 'khac', label: 'Khác' }
+    ];
+
+    // Form state - UPDATED to use service_type
     const [formData, setFormData] = useState({
         // Customer info
         customerName: '',
         birthDate: '',
         phone: '',
-        organization: '',
-        referrer: '',
 
         // Order info
         priority: 'normal',
@@ -29,33 +33,19 @@ const NewOrder = () => {
         materialStatus: 'available',
         totalPrice: 0,
 
-        // Order items - now includes productType
+        // UPDATED: Now uses service_type instead of productId
         orderItems: [{
-            productType: 'sew_new', // 'sew_new' or 'fix_product'
-            productId: '',
+            serviceType: '', // Replaces productId
             quantity: 1,
-            unitPrice: 0
+            unitPrice: 0,
+            notes: ''
         }],
     });
 
     useEffect(() => {
-        fetchProducts();
+        // REMOVED fetchProducts() - no longer needed
         fetchEmployeeSchedules();
     }, []);
-
-    const fetchProducts = async () => {
-        try {
-            const { data, error } = await supabase
-                .from('products')
-                .select('*')
-                .order('name');
-
-            if (error) throw error;
-            setProducts(data || []);
-        } catch (error) {
-            console.error('Error fetching products:', error);
-        }
-    };
 
     const fetchEmployeeSchedules = async () => {
         try {
@@ -81,138 +71,73 @@ const NewOrder = () => {
         // Check if it's Sunday
         if (isSunday(date)) return false;
 
-        // Check if it's a scheduled day off
+        // Check if employees have day off
         const dateStr = format(date, 'yyyy-MM-dd');
-        const isDayOff = employeeSchedules.some(schedule =>
-            schedule.date === dateStr && !schedule.is_working
+        const hasSewerOff = employeeSchedules.some(
+            s => s.date === dateStr && s.employee_type === 'sewer' && !s.is_working
+        );
+        const hasDecoratorOff = employeeSchedules.some(
+            s => s.date === dateStr && s.employee_type === 'decorator' && !s.is_working
         );
 
-        return !isDayOff;
+        // If both have day off, it's not a working day
+        return !(hasSewerOff && hasDecoratorOff);
     }, [employeeSchedules]);
 
-    const calculateWorkingDays = useCallback((startDate, days) => {
-        let currentDate = new Date(startDate);
-        let workingDaysAdded = 0;
+    const calculateDates = useCallback(() => {
+        if (formData.priority === 'urgent' && formData.specifiedPickupDate) {
+            // For URGENT orders with specified date
+            const pickupDate = new Date(formData.specifiedPickupDate);
+            let fittingDate = pickupDate;
+            let workingDaysFound = 0;
 
-        while (workingDaysAdded < days) {
-            currentDate = addDays(currentDate, 1);
-
-            // Check if it's a working day
-            if (isWorkingDay(currentDate)) {
-                workingDaysAdded++;
-            }
-        }
-
-        return currentDate;
-    }, [isWorkingDay]);
-
-    const calculateProductionSchedule = useCallback(() => {
-        if (!formData.orderItems[0]) return;
-
-        try {
-            const today = new Date();
-            let fittingDate = null;
-            let pickupDate = null;
-            let requiresOvertime = false;
-            let overtimeHours = 0;
-
-            const orderItem = formData.orderItems[0];
-            const isFixProduct = orderItem.productType === 'fix_product';
-
-            // Get product info if it's a new product
-            const selectedProduct = !isFixProduct && orderItem.productId ?
-                products.find(p => p.id === orderItem.productId) : null;
-            const needsDecoration = selectedProduct?.type === 'ao_dai';
-
-            // Add 3 hours for fix product
-            let additionalHours = isFixProduct ? 3 : 0;
-
-            if (formData.priority === 'urgent' && formData.specifiedPickupDate) {
-                // URGENT order - work backward from delivery date
-                const actualDeliveryDate = new Date(formData.specifiedPickupDate);
-
-                // Calculate required days
-                const requiredDays = isFixProduct ?
-                    0.5 : // Half day for fix product
-                    Math.ceil(1.5 + (needsDecoration ? 1 : 0));
-
-                // Calculate fitting date
-                let daysBeforeDelivery = 0;
-                let currentDate = new Date(actualDeliveryDate);
-
-                while (daysBeforeDelivery < requiredDays) {
-                    currentDate = addDays(currentDate, -1);
-                    if (isWorkingDay(currentDate)) {
-                        daysBeforeDelivery++;
-                    }
-                }
-
-                fittingDate = currentDate;
-
-                // Check if we have enough working days
-                const availableWorkingDays = [];
-                currentDate = new Date(today);
-                while (currentDate <= actualDeliveryDate) {
-                    if (isWorkingDay(currentDate)) {
-                        availableWorkingDays.push(currentDate);
-                    }
-                    currentDate = addDays(currentDate, 1);
-                }
-
-                if (availableWorkingDays.length < requiredDays) {
-                    requiresOvertime = true;
-                    overtimeHours = Math.ceil((requiredDays - availableWorkingDays.length) * 8) + additionalHours;
-                }
-
-                pickupDate = actualDeliveryDate;
-
-            } else {
-                // REGULAR order - work forward from today
-                let startDate = today;
-
-                // If material needs to be ordered, add 5 working days
-                if (formData.materialStatus === 'need_order' && !isFixProduct) {
-                    startDate = calculateWorkingDays(today, 5);
-                }
-
-                // Calculate based on current workload
-                if (isFixProduct) {
-                    // Fix product: just 3 hours of work
-                    fittingDate = startDate; // Same day fitting
-                    pickupDate = calculateWorkingDays(startDate, 0.5); // Half day for completion
-                } else {
-                    const sewingDays = 1; // 1 day for sewing 50%
-                    const finishingDays = 0.5; // Half day for finishing
-                    const decorationDays = needsDecoration ? 1 : 0;
-
-                    // Calculate fitting date (after sewing 50%)
-                    fittingDate = calculateWorkingDays(startDate, sewingDays);
-
-                    // Calculate pickup date
-                    pickupDate = calculateWorkingDays(fittingDate, finishingDays + decorationDays);
+            // Find 3 working days before pickup for fitting
+            while (workingDaysFound < 3) {
+                fittingDate = addDays(fittingDate, -1);
+                if (isWorkingDay(fittingDate)) {
+                    workingDaysFound++;
                 }
             }
 
             setCalculatedDates({
-                fittingDate,
-                pickupDate,
-                requiresOvertime,
-                overtimeHours,
-                productionDays: differenceInDays(pickupDate, today)
+                fittingDate: format(fittingDate, 'yyyy-MM-dd'),
+                pickupDate: format(pickupDate, 'yyyy-MM-dd')
             });
+        } else {
+            // For NORMAL orders
+            const today = new Date();
+            let fittingDate = today;
+            let workingDaysCount = 0;
 
-        } catch (error) {
-            console.error('Error calculating schedule:', error);
+            // Calculate fitting date (3-5 working days based on material)
+            const daysForFitting = formData.materialStatus === 'need_order' ? 5 : 3;
+            while (workingDaysCount < daysForFitting) {
+                fittingDate = addDays(fittingDate, 1);
+                if (isWorkingDay(fittingDate)) {
+                    workingDaysCount++;
+                }
+            }
+
+            // Calculate pickup date (5 working days after fitting)
+            let pickupDate = fittingDate;
+            workingDaysCount = 0;
+            while (workingDaysCount < 5) {
+                pickupDate = addDays(pickupDate, 1);
+                if (isWorkingDay(pickupDate)) {
+                    workingDaysCount++;
+                }
+            }
+
+            setCalculatedDates({
+                fittingDate: format(fittingDate, 'yyyy-MM-dd'),
+                pickupDate: format(pickupDate, 'yyyy-MM-dd')
+            });
         }
-    }, [formData.orderItems, formData.priority, formData.specifiedPickupDate,
-        formData.materialStatus, products, employeeSchedules, calculateWorkingDays, isWorkingDay]);
+    }, [formData.priority, formData.specifiedPickupDate, formData.materialStatus, isWorkingDay]);
 
     useEffect(() => {
-        if (formData.orderItems.length > 0) {
-            calculateProductionSchedule();
-        }
-    }, [formData.orderItems, formData.priority, formData.specifiedPickupDate,
-        formData.materialStatus, calculateProductionSchedule]);
+        calculateDates();
+    }, [calculateDates]);
 
     const handleInputChange = (e) => {
         const { name, value, type, checked } = e.target;
@@ -222,14 +147,22 @@ const NewOrder = () => {
         }));
     };
 
+    // UPDATED: Simplified to work with service_type
     const handleOrderItemChange = (index, field, value) => {
         const newItems = [...formData.orderItems];
         newItems[index] = { ...newItems[index], [field]: value };
 
-        // If product type changes, reset product selection and price
-        if (field === 'productType') {
-            newItems[index].productId = '';
-            newItems[index].unitPrice = value === 'fix_product' ? 50000 : 0; // Default price for fix
+        // Set default price based on service type
+        if (field === 'serviceType') {
+            const defaultPrices = {
+                'may_ao_dai': 500000,
+                'may_ao_cuoi': 1000000,
+                'may_vest': 400000,
+                'may_dam': 300000,
+                'sua_chua': 50000,
+                'khac': 0
+            };
+            newItems[index].unitPrice = defaultPrices[value] || 0;
         }
 
         // Calculate total price
@@ -246,10 +179,10 @@ const NewOrder = () => {
         setFormData(prev => ({
             ...prev,
             orderItems: [...prev.orderItems, {
-                productType: 'sew_new',
-                productId: '',
+                serviceType: '',
                 quantity: 1,
-                unitPrice: 0
+                unitPrice: 0,
+                notes: ''
             }]
         }));
     };
@@ -276,23 +209,27 @@ const NewOrder = () => {
                 .from('customers')
                 .insert({
                     name: formData.customerName,
-                    birth_date: formData.birthDate || null,
                     phone: formData.phone,
-                    organization: formData.organization,
-                    referrer: formData.referrer
+
                 })
                 .select()
                 .single();
 
             if (customerError) throw customerError;
 
-            // Create order with actual_delivery_date for URGENT orders
+            // Generate order number
+            const orderNumber = `ORD-${Date.now()}`;
+
+            // UPDATED: Create order with service_type
             const orderData = {
+                order_number: orderNumber,
                 customer_id: customer.id,
+                service_type: formData.orderItems[0].serviceType, // Main service type
                 priority: formData.priority,
                 material_status: formData.materialStatus,
-                total_price: formData.totalPrice,
-                status: 'pending'
+                total_amount: formData.totalPrice,
+                status: 'pending',
+                delivery_date: calculatedDates?.pickupDate
             };
 
             // For URGENT orders, store the actual delivery date
@@ -308,25 +245,14 @@ const NewOrder = () => {
 
             if (orderError) throw orderError;
 
-            // Create order items
-            const orderItemsData = formData.orderItems.map(item => {
-                if (item.productType === 'fix_product') {
-                    return {
-                        order_id: order.id,
-                        product_id: null, // Fix product doesn't have a product_id
-                        quantity: item.quantity,
-                        unit_price: item.unitPrice,
-                        notes: 'Sửa chữa sản phẩm'
-                    };
-                } else {
-                    return {
-                        order_id: order.id,
-                        product_id: item.productId,
-                        quantity: item.quantity,
-                        unit_price: item.unitPrice
-                    };
-                }
-            });
+            // UPDATED: Create order items with service_type
+            const orderItemsData = formData.orderItems.map(item => ({
+                order_id: order.id,
+                service_type: item.serviceType,
+                quantity: item.quantity,
+                price: item.unitPrice,
+                notes: item.notes || null
+            }));
 
             const { data: orderItems, error: itemsError } = await supabase
                 .from('order_items')
@@ -336,43 +262,40 @@ const NewOrder = () => {
             if (itemsError) throw itemsError;
 
             // Create production schedule
-            for (const item of orderItems) {
-                const scheduleData = {
-                    order_id: order.id,
-                    order_item_id: item.id,
-                    scheduled_fitting_date: calculatedDates?.fittingDate,
-                    scheduled_pickup_date: calculatedDates?.pickupDate,
-                    status: formData.materialStatus === 'need_order' ? 'pending_material' : 'pending',
-                    requires_overtime: calculatedDates?.requiresOvertime || false,
-                    overtime_hours: calculatedDates?.overtimeHours || 0
-                };
+            const scheduleData = {
+                order_id: order.id,
+                start_date: format(new Date(), 'yyyy-MM-dd'),
+                end_date: calculatedDates?.pickupDate,
+                status: formData.materialStatus === 'need_order' ? 'waiting_material' : 'scheduled'
+            };
 
-                const { error: scheduleError } = await supabase
-                    .from('production_schedule')
-                    .insert(scheduleData);
+            const { error: scheduleError } = await supabase
+                .from('production_schedule')
+                .insert(scheduleData);
 
-                if (scheduleError) throw scheduleError;
-            }
+            if (scheduleError) throw scheduleError;
 
             setMessage('Đơn hàng đã được tạo thành công!');
+
             // Reset form
             setFormData({
                 customerName: '',
                 birthDate: '',
                 phone: '',
-                organization: '',
-                referrer: '',
                 priority: 'normal',
                 specifiedPickupDate: '',
                 materialStatus: 'available',
                 totalPrice: 0,
-                orderItems: [{ productType: 'sew_new', productId: '', quantity: 1, unitPrice: 0 }],
+                orderItems: [{
+                    serviceType: '',
+                    quantity: 1,
+                    unitPrice: 0,
+                    notes: ''
+                }]
             });
-            setCalculatedDates(null);
-
         } catch (error) {
             console.error('Error creating order:', error);
-            setMessage('Lỗi khi tạo đơn hàng: ' + error.message);
+            setMessage(`Lỗi: ${error.message}`);
         } finally {
             setLoading(false);
         }
@@ -388,233 +311,177 @@ const NewOrder = () => {
                 </div>
             )}
 
-            <form onSubmit={handleSubmit} className="order-form">
+            <form onSubmit={handleSubmit}>
                 {/* Customer Information */}
                 <div className="form-section">
                     <h3>Thông Tin Khách Hàng</h3>
                     <div className="form-grid">
                         <div className="form-group">
-                            <label>Tên khách hàng *</label>
+                            <label>Tên Khách Hàng *</label>
                             <input
                                 type="text"
                                 name="customerName"
                                 value={formData.customerName}
                                 onChange={handleInputChange}
                                 required
-                                className="form-input"
                             />
                         </div>
                         <div className="form-group">
-                            <label>Ngày sinh</label>
+                            <label>Ngày Sinh</label>
                             <input
                                 type="date"
                                 name="birthDate"
                                 value={formData.birthDate}
                                 onChange={handleInputChange}
-                                className="form-input"
                             />
                         </div>
                         <div className="form-group">
-                            <label>Số điện thoại</label>
+                            <label>Số Điện Thoại *</label>
                             <input
                                 type="tel"
                                 name="phone"
                                 value={formData.phone}
                                 onChange={handleInputChange}
-                                className="form-input"
+                                required
                             />
                         </div>
-                        <div className="form-group">
-                            <label>Tổ chức</label>
-                            <input
-                                type="text"
-                                name="organization"
-                                value={formData.organization}
-                                onChange={handleInputChange}
-                                className="form-input"
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label>Người giới thiệu</label>
-                            <input
-                                type="text"
-                                name="referrer"
-                                value={formData.referrer}
-                                onChange={handleInputChange}
-                                className="form-input"
-                            />
-                        </div>
+
+
                     </div>
                 </div>
 
-                {/* Order Details */}
+                {/* Order Information */}
                 <div className="form-section">
-                    <h3>Chi Tiết Đơn Hàng</h3>
+                    <h3>Thông Tin Đơn Hàng</h3>
                     <div className="form-grid">
                         <div className="form-group">
-                            <label>Độ ưu tiên</label>
+                            <label>Độ Ưu Tiên</label>
                             <select
                                 name="priority"
                                 value={formData.priority}
                                 onChange={handleInputChange}
-                                className="form-select"
                             >
-                                <option value="normal">Thường</option>
-                                <option value="urgent">Khẩn cấp</option>
+                                <option value="normal">Bình Thường</option>
+                                <option value="urgent">Khẩn Cấp</option>
                             </select>
                         </div>
 
                         {formData.priority === 'urgent' && (
                             <div className="form-group">
-                                <label>Ngày giao hàng yêu cầu *</label>
+                                <label>Ngày Lấy Hàng Yêu Cầu *</label>
                                 <input
                                     type="date"
                                     name="specifiedPickupDate"
                                     value={formData.specifiedPickupDate}
                                     onChange={handleInputChange}
                                     min={format(addDays(new Date(), 1), 'yyyy-MM-dd')}
-                                    required={formData.priority === 'urgent'}
-                                    className="form-input"
+                                    required
                                 />
                             </div>
                         )}
 
                         <div className="form-group">
-                            <label>Tình trạng vật liệu</label>
+                            <label>Tình Trạng Vải</label>
                             <select
                                 name="materialStatus"
                                 value={formData.materialStatus}
                                 onChange={handleInputChange}
-                                className="form-select"
                             >
-                                <option value="available">Có sẵn</option>
-                                <option value="need_order">Cần đặt hàng</option>
+                                <option value="available">Có Sẵn</option>
+                                <option value="need_order">Cần Đặt</option>
                             </select>
                         </div>
                     </div>
                 </div>
 
-                {/* Order Items */}
+                {/* UPDATED: Order Items - Now with service_type */}
                 <div className="form-section">
-                    <h3>Sản Phẩm</h3>
+                    <h3>Chi Tiết Dịch Vụ</h3>
                     {formData.orderItems.map((item, index) => (
                         <div key={index} className="order-item">
                             <div className="form-grid">
                                 <div className="form-group">
-                                    <label>Loại dịch vụ</label>
+                                    <label>Loại Dịch Vụ *</label>
                                     <select
-                                        value={item.productType}
-                                        onChange={(e) => handleOrderItemChange(index, 'productType', e.target.value)}
-                                        className="form-select"
+                                        value={item.serviceType}
+                                        onChange={(e) => handleOrderItemChange(index, 'serviceType', e.target.value)}
                                         required
                                     >
-                                        <option value="sew_new">May sản phẩm mới</option>
-                                        <option value="fix_product">Sửa chữa sản phẩm</option>
+                                        <option value="">Chọn dịch vụ</option>
+                                        {serviceTypes.map(type => (
+                                            <option key={type.value} value={type.value}>
+                                                {type.label}
+                                            </option>
+                                        ))}
                                     </select>
                                 </div>
 
-                                {item.productType === 'sew_new' && (
-                                    <div className="form-group">
-                                        <label>Sản phẩm</label>
-                                        <select
-                                            value={item.productId}
-                                            onChange={(e) => {
-                                                const product = products.find(p => p.id === e.target.value);
-                                                handleOrderItemChange(index, 'productId', e.target.value);
-                                                if (product) {
-                                                    handleOrderItemChange(index, 'unitPrice', product.base_price);
-                                                }
-                                            }}
-                                            className="form-select"
-                                            required
-                                        >
-                                            <option value="">Chọn sản phẩm</option>
-                                            {products.map(product => (
-                                                <option key={product.id} value={product.id}>
-                                                    {product.name} - {product.base_price?.toLocaleString()}đ
-                                                </option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                )}
-
                                 <div className="form-group">
-                                    <label>Số lượng</label>
+                                    <label>Số Lượng</label>
                                     <input
                                         type="number"
                                         value={item.quantity}
                                         onChange={(e) => handleOrderItemChange(index, 'quantity', parseInt(e.target.value))}
                                         min="1"
                                         required
-                                        className="form-input"
                                     />
                                 </div>
 
                                 <div className="form-group">
-                                    <label>Đơn giá</label>
+                                    <label>Đơn Giá</label>
                                     <input
                                         type="number"
                                         value={item.unitPrice}
-                                        onChange={(e) => handleOrderItemChange(index, 'unitPrice', parseFloat(e.target.value))}
+                                        onChange={(e) => handleOrderItemChange(index, 'unitPrice', parseInt(e.target.value))}
                                         min="0"
                                         required
-                                        className="form-input"
+                                    />
+                                </div>
+
+                                <div className="form-group">
+                                    <label>Ghi Chú</label>
+                                    <input
+                                        type="text"
+                                        value={item.notes}
+                                        onChange={(e) => handleOrderItemChange(index, 'notes', e.target.value)}
+                                        placeholder="Ghi chú cho dịch vụ..."
                                     />
                                 </div>
 
                                 {formData.orderItems.length > 1 && (
-                                    <div className="form-group">
-                                        <label>&nbsp;</label>
-                                        <button
-                                            type="button"
-                                            onClick={() => removeOrderItem(index)}
-                                            className="btn-remove"
-                                        >
-                                            Xóa
-                                        </button>
-                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => removeOrderItem(index)}
+                                        className="btn-remove"
+                                    >
+                                        Xóa
+                                    </button>
                                 )}
                             </div>
                         </div>
                     ))}
                     <button type="button" onClick={addOrderItem} className="btn-add">
-                        Thêm sản phẩm
+                        Thêm Dịch Vụ
                     </button>
                 </div>
 
-                {/* Calculated Schedule */}
-                {calculatedDates && (
-                    <div className="form-section schedule-preview">
-                        <h3>Lịch Sản Xuất Dự Kiến</h3>
-                        <div className="schedule-info">
-                            <p>
-                                <strong>Ngày thử phôi:</strong>{' '}
-                                {format(new Date(calculatedDates.fittingDate), 'dd/MM/yyyy', { locale: vi })}
-                            </p>
-                            <p>
-                                <strong>Ngày lấy hàng:</strong>{' '}
-                                {format(new Date(calculatedDates.pickupDate), 'dd/MM/yyyy', { locale: vi })}
-                            </p>
-                            {calculatedDates.requiresOvertime && (
-                                <p className="overtime-warning">
-                                    ⚠️ Cần làm thêm giờ: {calculatedDates.overtimeHours} giờ
-                                </p>
-                            )}
-                            <p>
-                                <strong>Tổng thời gian sản xuất:</strong> {calculatedDates.productionDays} ngày
-                            </p>
-                        </div>
-                    </div>
-                )}
-
-                {/* Total Price */}
+                {/* Summary */}
                 <div className="form-section">
-                    <h3>Tổng Cộng: {formData.totalPrice.toLocaleString()}đ</h3>
+                    <h3>Tổng Kết</h3>
+                    <div className="summary">
+                        <p><strong>Tổng Tiền:</strong> {formData.totalPrice.toLocaleString('vi-VN')} VNĐ</p>
+                        {calculatedDates && (
+                            <>
+                                <p><strong>Ngày Thử Đồ Dự Kiến:</strong> {format(new Date(calculatedDates.fittingDate), 'dd/MM/yyyy', { locale: vi })}</p>
+                                <p><strong>Ngày Lấy Hàng Dự Kiến:</strong> {format(new Date(calculatedDates.pickupDate), 'dd/MM/yyyy', { locale: vi })}</p>
+                            </>
+                        )}
+                    </div>
                 </div>
 
                 <div className="form-actions">
-                    <button type="submit" disabled={loading} className="btn btn-primary">
-                        {loading ? 'Đang xử lý...' : 'Tạo đơn hàng'}
+                    <button type="submit" disabled={loading} className="btn-submit">
+                        {loading ? 'Đang xử lý...' : 'Tạo Đơn Hàng'}
                     </button>
                 </div>
             </form>

@@ -2,12 +2,21 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
 
-
 const OrderSummary = () => {
     const [orders, setOrders] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [notifications, setNotifications] = useState([]);
+
+    // Service type labels for display
+    const serviceTypeLabels = {
+        'may_ao_dai': 'May Áo Dài',
+        'may_ao_cuoi': 'May Áo Cưới',
+        'may_vest': 'May Vest',
+        'may_dam': 'May Đầm',
+        'sua_chua': 'Sửa Chữa',
+        'khac': 'Khác'
+    };
 
     const handleScheduleUpdate = useCallback((payload) => {
         // Add notification when schedule is updated
@@ -27,26 +36,21 @@ const OrderSummary = () => {
         try {
             setLoading(true);
 
+            // UPDATED: Removed products join, using service_type directly
             const { data, error } = await supabase
                 .from('orders')
                 .select(`
                     *,
                     customers (
                         name,
-                        birth_date,
                         phone,
-                        organization,
-                        referrer
                     ),
                     order_items (
                         id,
+                        service_type,
                         quantity,
-                        unit_price,
-                        notes,
-                        products (
-                            name,
-                            type
-                        )
+                        price,
+                        notes
                     ),
                     production_schedule (
                         scheduled_fitting_date,
@@ -58,7 +62,7 @@ const OrderSummary = () => {
                         overtime_hours
                     )
                 `)
-                .order('order_date', { ascending: false });
+                .order('created_at', { ascending: false });
 
             if (error) throw error;
 
@@ -105,6 +109,16 @@ const OrderSummary = () => {
         }
     };
 
+    const getStatusLabel = (status) => {
+        switch (status) {
+            case 'pending': return 'Chờ xử lý';
+            case 'in_progress': return 'Đang thực hiện';
+            case 'completed': return 'Hoàn thành';
+            case 'cancelled': return 'Đã hủy';
+            default: return status;
+        }
+    };
+
     if (loading) {
         return <div className="loading">Đang tải...</div>;
     }
@@ -115,125 +129,147 @@ const OrderSummary = () => {
 
     return (
         <div className="order-summary-container">
-            <div className="header">
-                <h2>Tổng Quan Đơn Hàng</h2>
+            <h2>Tổng Quan Đơn Hàng</h2>
 
-                {/* Notifications */}
-                {notifications.length > 0 && (
-                    <div className="notifications-container">
-                        {notifications.slice(0, 3).map(notification => (
-                            <div key={notification.id} className="notification">
-                                <span className="notification-message">{notification.message}</span>
-                                <span className="notification-time">
-                                    {format(new Date(notification.timestamp), 'HH:mm')}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
+            {/* Notifications */}
+            {notifications.length > 0 && (
+                <div className="notifications">
+                    {notifications.map(notif => (
+                        <div key={notif.id} className="notification">
+                            <span>{notif.message}</span>
+                            <span className="timestamp">
+                                {format(notif.timestamp, 'HH:mm:ss dd/MM/yyyy')}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {/* Orders Table */}
+            <div className="orders-table">
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Mã Đơn</th>
+                        <th>Khách Hàng</th>
+                        <th>Loại Dịch Vụ</th>
+                        <th>Số Lượng</th>
+                        <th>Tổng Tiền</th>
+                        <th>Ngày Đặt</th>
+                        <th>Ngày Thử</th>
+                        <th>Ngày Lấy</th>
+                        <th>Trạng Thái</th>
+                        <th>Ưu Tiên</th>
+                        <th>Làm Thêm Giờ</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {orders.map(order => (
+                        <tr key={order.id}>
+                            <td>{order.order_number}</td>
+                            <td>
+                                <div className="customer-info">
+                                    <strong>{order.customers?.name}</strong>
+                                    <span>{order.customers?.phone}</span>
+                                </div>
+                            </td>
+                            <td>
+                                {/* UPDATED: Display service type instead of product */}
+                                <div className="service-info">
+                                    <strong>{serviceTypeLabels[order.service_type] || order.service_type}</strong>
+                                    {order.order_items?.map((item, idx) => (
+                                        <div key={idx} className="service-item">
+                                            {item.service_type !== order.service_type && (
+                                                <span>+ {serviceTypeLabels[item.service_type] || item.service_type}</span>
+                                            )}
+                                            {item.notes && <span className="notes">({item.notes})</span>}
+                                        </div>
+                                    ))}
+                                </div>
+                            </td>
+                            <td>
+                                {order.order_items?.reduce((sum, item) => sum + item.quantity, 0) || 0}
+                            </td>
+                            <td className="amount">
+                                {order.total_amount?.toLocaleString('vi-VN')} VNĐ
+                            </td>
+                            <td>
+                                {order.order_date && format(new Date(order.order_date), 'dd/MM/yyyy')}
+                            </td>
+                            <td>
+                                {order.production_schedule?.[0]?.scheduled_fitting_date && (
+                                    <div>
+                                        <div className="scheduled-date">
+                                            {format(new Date(order.production_schedule[0].scheduled_fitting_date), 'dd/MM/yyyy')}
+                                        </div>
+                                        {order.production_schedule[0].actual_fitting_date && (
+                                            <div className="actual-date">
+                                                Thực tế: {format(new Date(order.production_schedule[0].actual_fitting_date), 'dd/MM/yyyy')}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </td>
+                            <td>
+                                {order.production_schedule?.[0]?.scheduled_pickup_date && (
+                                    <div>
+                                        <div className="scheduled-date">
+                                            {format(new Date(order.production_schedule[0].scheduled_pickup_date), 'dd/MM/yyyy')}
+                                        </div>
+                                        {order.production_schedule[0].actual_pickup_date && (
+                                            <div className="actual-date">
+                                                Thực tế: {format(new Date(order.production_schedule[0].actual_pickup_date), 'dd/MM/yyyy')}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </td>
+                            <td>
+                                    <span className={`status-badge ${getStatusColor(order.status)}`}>
+                                        {getStatusLabel(order.status)}
+                                    </span>
+                            </td>
+                            <td>
+                                    <span className={`priority-badge ${getPriorityColor(order.priority)}`}>
+                                        {order.priority === 'urgent' ? 'Khẩn Cấp' : 'Bình Thường'}
+                                    </span>
+                            </td>
+                            <td>
+                                {order.production_schedule?.[0]?.requires_overtime && (
+                                    <span className="overtime">
+                                            {order.production_schedule[0].overtime_hours} giờ
+                                        </span>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                    </tbody>
+                </table>
+
+                {orders.length === 0 && (
+                    <div className="no-data">Không có đơn hàng nào</div>
                 )}
             </div>
 
-            <div className="content">
-                <div className="table-container">
-                    <table>
-                        <thead>
-                        <tr>
-                            <th>Mã ĐH</th>
-                            <th>Khách hàng</th>
-                            <th>Sản phẩm</th>
-                            <th>Ngày đặt</th>
-                            <th>Ưu tiên</th>
-                            <th>Ngày thử phôi</th>
-                            <th>Ngày lấy hàng</th>
-                            <th>Giá trị</th>
-                            <th>Làm thêm</th>
-                            <th>Trạng thái</th>
-                            <th>Ghi chú</th>
-                        </tr>
-                        </thead>
-                        <tbody>
-                        {orders.map(order => {
-                            const schedule = order.production_schedule?.[0];
-                            const orderNotifications = notifications.filter(n => n.order_id === order.id);
-
-                            return (
-                                <tr key={order.id}>
-                                    <td>#{order.id.slice(0, 8)}</td>
-                                    <td>
-                                        <div className="customer-info">
-                                            <strong>{order.customers?.name}</strong>
-                                            {order.customers?.phone && (
-                                                <span className="phone">{order.customers.phone}</span>
-                                            )}
-                                        </div>
-                                    </td>
-                                    <td>
-                                        {order.order_items?.map((item, idx) => (
-                                            <div key={idx} className="product-item">
-                                                {item.products?.name || item.notes || 'Sản phẩm'} x{item.quantity}
-                                            </div>
-                                        ))}
-                                    </td>
-                                    <td>{format(new Date(order.order_date), 'dd/MM/yyyy')}</td>
-                                    <td>
-                                        <span className={`status-badge ${getPriorityColor(order.priority)}`}>
-                                            {order.priority === 'urgent' ? 'Khẩn cấp' : 'Thường'}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        {schedule?.scheduled_fitting_date &&
-                                            format(new Date(schedule.scheduled_fitting_date), 'dd/MM/yyyy')}
-                                        {schedule?.actual_fitting_date && (
-                                            <div className="actual-date">
-                                                Thực tế: {format(new Date(schedule.actual_fitting_date), 'dd/MM')}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td>
-                                        {schedule?.scheduled_pickup_date &&
-                                            format(new Date(schedule.scheduled_pickup_date), 'dd/MM/yyyy')}
-                                        {schedule?.actual_pickup_date && (
-                                            <div className="actual-date">
-                                                Thực tế: {format(new Date(schedule.actual_pickup_date), 'dd/MM')}
-                                            </div>
-                                        )}
-                                    </td>
-                                    <td>{order.total_price?.toLocaleString()}đ</td>
-                                    <td>
-                                        {schedule?.requires_overtime && (
-                                            <span className="status-badge status-warning">
-                                                {schedule.overtime_hours} giờ
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td>
-                                        <span className={`status-badge ${getStatusColor(order.status)}`}>
-                                            {order.status === 'pending' && 'Chờ xử lý'}
-                                            {order.status === 'in_progress' && 'Đang thực hiện'}
-                                            {order.status === 'completed' && 'Hoàn thành'}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        {orderNotifications.length > 0 && (
-                                            <div className="order-notifications">
-                                                {orderNotifications.map(n => (
-                                                    <div key={n.id} className="mini-notification">
-                                                        {n.message}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                    </td>
-                                </tr>
-                            );
-                        })}
-                        </tbody>
-                    </table>
-                    {orders.length === 0 && (
-                        <div className="empty-state">
-                            Chưa có đơn hàng nào
-                        </div>
-                    )}
+            {/* Summary Statistics */}
+            <div className="summary-stats">
+                <div className="stat-card">
+                    <h4>Tổng Đơn Hàng</h4>
+                    <p>{orders.length}</p>
+                </div>
+                <div className="stat-card">
+                    <h4>Đang Xử Lý</h4>
+                    <p>{orders.filter(o => o.status === 'in_progress').length}</p>
+                </div>
+                <div className="stat-card">
+                    <h4>Đơn Khẩn Cấp</h4>
+                    <p>{orders.filter(o => o.priority === 'urgent').length}</p>
+                </div>
+                <div className="stat-card">
+                    <h4>Tổng Doanh Thu</h4>
+                    <p>
+                        {orders.reduce((sum, o) => sum + (o.total_amount || 0), 0).toLocaleString('vi-VN')} VNĐ
+                    </p>
                 </div>
             </div>
         </div>
