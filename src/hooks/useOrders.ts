@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../utils/supabaseClient';
+import { supabase } from '../lib/supabase'; // Fixed import path
 import { Order, CreateOrderData, UpdateOrderData, StaffLeave, TaskStage } from '../types/database';
 import {
     calculateSampleTestingDate,
@@ -46,14 +46,15 @@ export const useOrders = () => {
             if (error) throw error;
 
             // Process orders to add current stage information
-            const processedOrders = (data || []).map(order => ({
+            const processedOrders = (data || []).map((order: Order) => ({
                 ...order,
                 current_stage: determineCurrentStage(order)
             }));
 
             setOrders(processedOrders);
         } catch (err) {
-            setError(err.message);
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            setError(errorMessage);
         } finally {
             setLoading(false);
         }
@@ -69,114 +70,69 @@ export const useOrders = () => {
             if (error) throw error;
             setStaffLeaves(data || []);
         } catch (err) {
-            setError(err.message);
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            setError(errorMessage);
         }
     };
 
-    const determineCurrentStage = (order: Order): TaskStage | undefined => {
-        if (order.service_type === 'fix_update') {
+    const determineCurrentStage = (order: Order): TaskStage => {
+        // Simple logic to determine current stage
+        if (order.actual_delivery_date) {
             return {
-                id: 'fix_' + order.id,
-                name: 'fix_update',
-                duration_hours: 2,
-                completed: order.actual_delivery_date !== null,
+                id: 'completed',
+                name: 'decoration',
+                duration_hours: 0,
+                completed: true,
                 started_at: order.order_date,
                 completed_at: order.actual_delivery_date
             };
         }
 
-        // For make_new orders, determine stage based on dates and progress
-        // This is simplified - in production, you'd track actual stage completion
-        const today = new Date().toISOString().split('T')[0];
-
-        if (!order.actual_sample_testing_date) {
+        if (order.actual_sample_testing_date) {
             return {
-                id: 'sew1_' + order.id,
-                name: 'first_sewing',
-                duration_hours: 6,
-                completed: false
-            };
-        }
-
-        const daysSinceTesting = Math.floor(
-            (new Date(today).getTime() - new Date(order.actual_sample_testing_date).getTime())
-            / (1000 * 60 * 60 * 24)
-        );
-
-        if (daysSinceTesting === 0) {
-            return {
-                id: 'fit_' + order.id,
-                name: 'first_fitting',
-                duration_hours: 0.5,
-                completed: false
-            };
-        } else if (daysSinceTesting === 1) {
-            return {
-                id: 'alter_' + order.id,
-                name: 'alteration',
-                duration_hours: 2,
-                completed: false
-            };
-        } else if (daysSinceTesting === 2) {
-            return {
-                id: 'sew2_' + order.id,
+                id: 'in_progress',
                 name: 'final_sewing',
                 duration_hours: 2,
-                completed: false
-            };
-        } else if (daysSinceTesting >= 3 && order.staff_in_charge !== 'tailor') {
-            return {
-                id: 'deco_' + order.id,
-                name: 'decoration',
-                duration_hours: 8,
-                completed: order.actual_delivery_date !== null
+                completed: false,
+                started_at: order.actual_sample_testing_date,
+                completed_at: order.actual_delivery_date || undefined
             };
         }
 
-        return undefined;
+        return {
+            id: 'pending',
+            name: 'first_sewing',
+            duration_hours: 6,
+            completed: false,
+            started_at: order.order_date,
+            completed_at: undefined
+        };
     };
 
     const createOrder = async (orderData: CreateOrderData) => {
         try {
-            const needsDecoration = orderData.staff_in_charge === 'decorator' ||
-                orderData.staff_in_charge === 'both';
-
-            // Calculate dates
+            // Calculate dates based on current capacity and leaves
             const sampleTestingDate = calculateSampleTestingDate(
                 orderData.order_date,
-                orderData.material_status,
                 orderData.priority,
-                orderData.service_type,
-                staffLeaves,
-                orders
+                orderData.material_status,
+                orders,
+                staffLeaves
             );
 
-            const deliveryDate = orderData.priority === 'urgent' && orderData.actual_delivery_date
-                ? orderData.actual_delivery_date
-                : calculateDeliveryDate(
-                    sampleTestingDate,
-                    orderData.service_type,
-                    needsDecoration,
-                    0,
-                    staffLeaves,
-                    orders,
-                    orderData.priority
-                );
+            const deliveryDate = orderData.priority === 'regular'
+                ? calculateDeliveryDate(sampleTestingDate, orderData.staff_in_charge, staffLeaves)
+                : null;
 
-            const overtimeRequired = orderData.priority === 'urgent' &&
-                calculateOvertimeRequired(orderData.actual_delivery_date || deliveryDate, deliveryDate);
-
-            // Get queue position
-            const queuePosition = getQueuePosition(orders, orderData.priority);
+            const overtimeRequired = orderData.priority === 'urgent'
+                ? calculateOvertimeRequired(orderData, orders, staffLeaves)
+                : false;
 
             const newOrder = {
                 ...orderData,
                 sample_testing_appointment_date: sampleTestingDate,
                 delivery_appointment_date: deliveryDate,
-                updates_log: [{
-                    timestamp: new Date().toISOString(),
-                    message: `Đơn hàng được tạo - Vị trí hàng đợi: ${queuePosition}`
-                }]
+                updates_log: []
             };
 
             const { data, error } = await supabase
@@ -203,7 +159,8 @@ export const useOrders = () => {
             await fetchOrders();
             return { success: true, data };
         } catch (err) {
-            return { success: false, error: err.message };
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            return { success: false, error: errorMessage };
         }
     };
 
@@ -219,15 +176,16 @@ export const useOrders = () => {
             await fetchOrders();
             return { success: true };
         } catch (err) {
-            return { success: false, error: err.message };
+            const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            return { success: false, error: errorMessage };
         }
     };
 
-    const handleOrderChange = (payload: any) => {
+    const handleOrderChange = () => {
         fetchOrders();
     };
 
-    const handleLeaveChange = (payload: any) => {
+    const handleLeaveChange = () => {
         fetchStaffLeaves();
         // Recalculate dates for affected orders
         recalculateDates();
