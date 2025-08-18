@@ -1,5 +1,17 @@
 import React, { useState } from 'react';
-import { Box, Typography, Paper, Button } from '@mui/material';
+import {
+    Box,
+    Typography,
+    Paper,
+    Button,
+    TextField,
+    MenuItem,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    DialogContentText
+} from '@mui/material';
 import { useStaffLeave } from '../hooks/useStaffLeave';
 import { formatDate } from '../utils/dateUtils';
 import dayjs from 'dayjs';
@@ -10,6 +22,14 @@ const StaffLeave: React.FC = () => {
         staff_name: 'tailor' as 'tailor' | 'decorator',
         leave_date: dayjs().format('YYYY-MM-DD'),
         is_sunday: false
+    });
+
+    // Confirmation dialog state
+    const [confirmDialog, setConfirmDialog] = useState({
+        open: false,
+        leaveId: '',
+        staffName: '',
+        leaveDate: ''
     });
 
     const handleAddLeave = async (e: React.FormEvent) => {
@@ -27,48 +47,60 @@ const StaffLeave: React.FC = () => {
     };
 
     const handleDeleteLeave = async (id: string) => {
-        if (!confirm('Bạn có chắc chắn muốn xóa ngày nghỉ này?')) return;
         await deleteLeave(id);
+        setConfirmDialog({ open: false, leaveId: '', staffName: '', leaveDate: '' });
+    };
+
+    const openConfirmDialog = (id: string, staffName: string, leaveDate: string) => {
+        setConfirmDialog({
+            open: true,
+            leaveId: id,
+            staffName: staffName === 'tailor' ? 'Thợ may' : 'Thợ thêu',
+            leaveDate: formatDate(leaveDate)
+        });
+    };
+
+    const closeConfirmDialog = () => {
+        setConfirmDialog({ open: false, leaveId: '', staffName: '', leaveDate: '' });
     };
 
     return (
         <Box sx={{ p: 3 }}>
-            <Typography variant="h5" gutterBottom>
-                Quản lý ngày nghỉ
+            <Typography variant="h4" gutterBottom>
+                Quản lý ngày nghỉ phép
             </Typography>
 
             <Paper sx={{ p: 3, mb: 3 }}>
                 <Typography variant="h6" gutterBottom>
-                    Thêm ngày nghỉ mới
+                    Thêm ngày nghỉ phép
                 </Typography>
 
                 <form onSubmit={handleAddLeave}>
-                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'end', flexWrap: 'wrap' }}>
-                        <Box>
-                            <Typography variant="body2" sx={{ mb: 1 }}>
-                                Nhân viên
-                            </Typography>
-                            <select
-                                value={newLeave.staff_name}
-                                onChange={(e) => setNewLeave(prev => ({ ...prev, staff_name: e.target.value as 'tailor' | 'decorator' }))}
-                                style={{ padding: '8px', fontSize: '14px' }}
-                            >
-                                <option value="tailor">Thợ may</option>
-                                <option value="decorator">Thợ thêu</option>
-                            </select>
-                        </Box>
+                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <TextField
+                            select
+                            label="Nhân viên"
+                            value={newLeave.staff_name}
+                            onChange={(e) => setNewLeave({
+                                ...newLeave,
+                                staff_name: e.target.value as 'tailor' | 'decorator'
+                            })}
+                            sx={{ minWidth: 150 }}
+                        >
+                            <MenuItem value="tailor">Thợ may</MenuItem>
+                            <MenuItem value="decorator">Thợ thêu</MenuItem>
+                        </TextField>
 
-                        <Box>
-                            <Typography variant="body2" sx={{ mb: 1 }}>
-                                Ngày nghỉ
-                            </Typography>
-                            <input
-                                type="date"
-                                value={newLeave.leave_date}
-                                onChange={(e) => setNewLeave(prev => ({ ...prev, leave_date: e.target.value }))}
-                                style={{ padding: '8px', fontSize: '14px' }}
-                            />
-                        </Box>
+                        <TextField
+                            type="date"
+                            label="Ngày nghỉ"
+                            value={newLeave.leave_date}
+                            onChange={(e) => setNewLeave({
+                                ...newLeave,
+                                leave_date: e.target.value
+                            })}
+                            InputLabelProps={{ shrink: true }}
+                        />
 
                         <Button
                             type="submit"
@@ -120,7 +152,11 @@ const StaffLeave: React.FC = () => {
                                     <Button
                                         size="small"
                                         color="error"
-                                        onClick={() => handleDeleteLeave(leave.id)}
+                                        onClick={() => openConfirmDialog(
+                                            leave.id,
+                                            leave.staff_name,
+                                            leave.leave_date
+                                        )}
                                     >
                                         Xóa
                                     </Button>
@@ -131,6 +167,38 @@ const StaffLeave: React.FC = () => {
                     </table>
                 </Box>
             </Paper>
+
+            {/* Confirmation Dialog */}
+            <Dialog
+                open={confirmDialog.open}
+                onClose={closeConfirmDialog}
+                maxWidth="sm"
+                fullWidth
+            >
+                <DialogTitle>Xác nhận xóa</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>
+                        Bạn có chắc chắn muốn xóa ngày nghỉ phép của{' '}
+                        <strong>{confirmDialog.staffName}</strong> vào ngày{' '}
+                        <strong>{confirmDialog.leaveDate}</strong>?
+                        <br /><br />
+                        Hành động này có thể ảnh hưởng đến lịch trình của các đơn hàng đã được lên kế hoạch.
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={closeConfirmDialog} color="primary">
+                        Hủy
+                    </Button>
+                    <Button
+                        onClick={() => handleDeleteLeave(confirmDialog.leaveId)}
+                        color="error"
+                        variant="contained"
+                        disabled={loading}
+                    >
+                        {loading ? 'Đang xóa...' : 'Xóa'}
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     );
 };

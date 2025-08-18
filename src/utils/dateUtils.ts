@@ -103,7 +103,7 @@ export const calculateCapacity = (
     const end = dayjs(endDate);
     let totalCapacity = 0;
 
-    while (current.isSameOrBefore(end, 'day')) {
+    while (current.isSame(end, 'day') || current.isBefore(end, 'day')) {
         // Skip Sundays
         if (current.day() === 0) {
             current = current.add(1, 'day');

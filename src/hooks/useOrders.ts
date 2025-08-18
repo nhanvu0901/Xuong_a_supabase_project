@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Order, ProgressTracking, StaffLeave } from '../types/database';
+import { Order, ProgressTracking, StaffLeave, CreateOrderData } from '../types/database';
 import {
     calculateSampleTestingDate,
     calculateDeliveryDate,
@@ -45,7 +45,7 @@ export const useOrders = () => {
         }
     };
 
-    const createOrder = async (orderData: Omit<Order, 'id' | 'created_at' | 'updated_at'>) => {
+    const createOrder = async (orderData: CreateOrderData) => {
         try {
             setLoading(true);
 

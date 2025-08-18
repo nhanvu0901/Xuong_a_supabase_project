@@ -3,7 +3,7 @@ export interface Database {
         Tables: {
             orders: {
                 Row: Order;
-                Insert: Omit<Order, 'id' | 'created_at' | 'updated_at'>;
+                Insert: Omit<Order, 'id' | 'created_at' | 'updated_at' | 'sample_testing_appointment_date' | 'delivery_appointment_date' | 'updates_log'>;
                 Update: Partial<Omit<Order, 'id' | 'created_at' | 'updated_at'>>;
             };
             progress_tracking: {
@@ -69,6 +69,12 @@ export interface UpdateLog {
     timestamp: string;
     message: string;
 }
+
+// Type for creating new orders (without calculated fields)
+export type CreateOrderData = Omit<Order, 'id' | 'created_at' | 'updated_at' | 'sample_testing_appointment_date' | 'delivery_appointment_date' | 'updates_log'>;
+
+// Type for updating orders
+export type UpdateOrderData = Partial<Omit<Order, 'id' | 'created_at' | 'updated_at'>>;
 
 export type Priority = 'regular' | 'urgent';
 export type StaffType = 'tailor' | 'decorator' | 'both';
