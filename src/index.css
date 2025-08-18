@@ -12,37 +12,83 @@ code {
     monospace;
 }
 
-/* Additional styles for alerts */
-.alert {
-    padding: 15px;
-    margin-bottom: 20px;
-    border: 1px solid transparent;
+* {
+    box-sizing: border-box;
+}
+
+/* Custom styles for better Vietnamese text rendering */
+.vietnamese-text {
+    font-family: 'Segoe UI', 'Roboto', 'Arial', sans-serif;
+    line-height: 1.5;
+}
+
+/* Table styles */
+table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+th, td {
+    text-align: left;
+    padding: 12px;
+    border-bottom: 1px solid #ddd;
+}
+
+th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+tr:hover {
+    background-color: #f9f9f9;
+}
+
+/* Form styles */
+input, select, textarea {
+    border: 1px solid #ddd;
     border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    transition: border-color 0.2s;
 }
 
-.alert-success {
-    color: #155724;
-    background-color: #d4edda;
-    border-color: #c3e6cb;
+input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: #1976d2;
 }
 
-.alert-error {
-    color: #721c24;
-    background-color: #f8d7da;
-    border-color: #f5c6cb;
+/* Button override for Material-UI consistency */
+button {
+    font-family: inherit;
 }
 
-/* Enhanced table styles */
-.delayed-row {
-    background-color: #fff5f5 !important;
+/* Loading spinner */
+.loading {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
 }
 
-.early-row {
-    background-color: #f0f9ff !important;
+/* Responsive table */
+@media (max-width: 768px) {
+    table {
+        font-size: 12px;
+    }
+
+    th, td {
+        padding: 8px;
+    }
 }
 
-/* Calendar enhancements */
-.calendar-day input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
+/* Print styles */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+
+    table {
+        page-break-inside: avoid;
+    }
 }
