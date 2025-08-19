@@ -12,7 +12,15 @@ import {
     ToggleButtonGroup,
     LinearProgress,
     Tooltip,
-    IconButton
+    IconButton,
+    Table,
+    TableBody,
+    TableCell,
+    TableContainer,
+    TableHead,
+    TableRow,
+    useTheme,
+    useMediaQuery
 } from '@mui/material';
 import {
     AccessTime,
@@ -32,11 +40,24 @@ import {Order} from "../types/database";
 
 const Dashboard: React.FC = () => {
     const { orders, loading } = useOrders();
-    const [viewMode, setViewMode] = useState<'overview' | 'timetable'>('timetable');
+    const [viewMode, setViewMode] = useState<'overview' | 'timetable'>('overview');
     const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+    const isTablet = useMediaQuery(theme.breakpoints.down('md'));
+
+    // Sort orders by delivery date (newest first)
+    const sortedOrders = useMemo(() => {
+        if (!orders) return [];
+        return [...orders].sort((a, b) => {
+            const dateA = dayjs(a.delivery_appointment_date || a.order_date);
+            const dateB = dayjs(b.delivery_appointment_date || b.order_date);
+            return dateA.valueOf()-dateB.valueOf(); // Newest first
+        });
+    }, [orders]);
 
     const stats = useMemo(() => {
-        if (!orders) return { total: 0, urgent: 0, waiting: 0, inProgress: 0, completed: 0 };
+        if (!orders) return { total: 0, urgent: 0, waiting: 0, inProgress: 0, completed: 0, makeNew: 0, fixUpdate: 0 };
 
         return {
             total: orders.length,
@@ -66,16 +87,24 @@ const Dashboard: React.FC = () => {
     }
 
     return (
-        <Box sx={{ p: 3 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-                <Typography variant="h4" fontWeight="bold">
+        <Box sx={{ p: { xs: 1, sm: 2, md: 3 } }}>
+            <Box sx={{
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                justifyContent: 'space-between',
+                alignItems: { xs: 'stretch', sm: 'center' },
+                mb: 3,
+                gap: 2
+            }}>
+                <Typography variant={isMobile ? "h5" : "h4"} fontWeight="bold">
                     Quản lý Đơn hàng Áo Dài
                 </Typography>
                 <ToggleButtonGroup
                     value={viewMode}
                     exclusive
                     onChange={(e, value) => value && setViewMode(value)}
-                    size="small"
+                    size={isMobile ? "small" : "medium"}
+                    fullWidth={isMobile}
                 >
                     <ToggleButton value="overview">
                         <CalendarToday sx={{ mr: 1 }} />
@@ -90,29 +119,29 @@ const Dashboard: React.FC = () => {
 
             {/* Statistics Cards */}
             <Grid container spacing={2} sx={{ mb: 3 }}>
-                <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ bgcolor: '#e3f2fd' }}>
-                        <CardContent>
-                            <Typography color="text.secondary" gutterBottom>
+                <Grid item xs={6} sm={6} md={3}>
+                    <Card sx={{ bgcolor: '#e3f2fd', height: '100%' }}>
+                        <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                            <Typography color="text.secondary" gutterBottom variant={isMobile ? "caption" : "body2"}>
                                 Tổng đơn hàng
                             </Typography>
-                            <Typography variant="h3" color="primary">
+                            <Typography variant={isMobile ? "h4" : "h3"} color="primary">
                                 {stats.total}
                             </Typography>
-                            <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+                            <Box sx={{ display: 'flex', gap: 0.5, mt: 1, flexWrap: 'wrap' }}>
                                 <Chip label={`Mới: ${stats.makeNew}`} size="small" color="info" />
                                 <Chip label={`Sửa: ${stats.fixUpdate}`} size="small" />
                             </Box>
                         </CardContent>
                     </Card>
                 </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ bgcolor: '#fff3e0' }}>
-                        <CardContent>
-                            <Typography color="text.secondary" gutterBottom>
+                <Grid item xs={6} sm={6} md={3}>
+                    <Card sx={{ bgcolor: '#fff3e0', height: '100%' }}>
+                        <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                            <Typography color="text.secondary" gutterBottom variant={isMobile ? "caption" : "body2"}>
                                 Đang xử lý
                             </Typography>
-                            <Typography variant="h3" color="warning.main">
+                            <Typography variant={isMobile ? "h4" : "h3"} color="warning.main">
                                 {stats.inProgress}
                             </Typography>
                             <Chip
@@ -125,13 +154,13 @@ const Dashboard: React.FC = () => {
                         </CardContent>
                     </Card>
                 </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ bgcolor: '#ffebee' }}>
-                        <CardContent>
-                            <Typography color="text.secondary" gutterBottom>
+                <Grid item xs={6} sm={6} md={3}>
+                    <Card sx={{ bgcolor: '#ffebee', height: '100%' }}>
+                        <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                            <Typography color="text.secondary" gutterBottom variant={isMobile ? "caption" : "body2"}>
                                 Đơn gấp
                             </Typography>
-                            <Typography variant="h3" color="error">
+                            <Typography variant={isMobile ? "h4" : "h3"} color="error">
                                 {stats.urgent}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
@@ -140,13 +169,13 @@ const Dashboard: React.FC = () => {
                         </CardContent>
                     </Card>
                 </Grid>
-                <Grid item xs={12} sm={6} md={3}>
-                    <Card sx={{ bgcolor: '#e8f5e9' }}>
-                        <CardContent>
-                            <Typography color="text.secondary" gutterBottom>
+                <Grid item xs={6} sm={6} md={3}>
+                    <Card sx={{ bgcolor: '#e8f5e9', height: '100%' }}>
+                        <CardContent sx={{ p: { xs: 1.5, sm: 2 } }}>
+                            <Typography color="text.secondary" gutterBottom variant={isMobile ? "caption" : "body2"}>
                                 Hoàn thành
                             </Typography>
-                            <Typography variant="h3" color="success.main">
+                            <Typography variant={isMobile ? "h4" : "h3"} color="success.main">
                                 {stats.completed}
                             </Typography>
                             <CheckCircle color="success" sx={{ mt: 1 }} />
@@ -155,76 +184,69 @@ const Dashboard: React.FC = () => {
                 </Grid>
             </Grid>
 
-            {/* Main Content Area */}
+            {/* Main Content */}
             {viewMode === 'timetable' ? (
-                <Paper sx={{ p: 3 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
-                        <Typography variant="h5" fontWeight="bold">
-                            Lịch làm việc theo giờ
+                <Paper sx={{ p: { xs: 1, sm: 2 } }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+                        <IconButton onClick={() => handleDateChange('prev')}>
+                            <NavigateBefore />
+                        </IconButton>
+                        <Typography variant="h6">
+                            {dayjs(selectedDate).format('dddd, DD/MM/YYYY')}
                         </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                            <IconButton onClick={() => handleDateChange('prev')}>
-                                <NavigateBefore />
-                            </IconButton>
-                            <Typography variant="h6">
-                                {formatDate(selectedDate, 'DD/MM/YYYY')} - {dayjs(selectedDate).format('dddd')}
-                            </Typography>
-                            <IconButton onClick={() => handleDateChange('next')}>
-                                <NavigateNext />
-                            </IconButton>
-                        </Box>
+                        <IconButton onClick={() => handleDateChange('next')}>
+                            <NavigateNext />
+                        </IconButton>
                     </Box>
-                    <DailyTimetable date={selectedDate} orders={orders} />
+                    <DailyTimetable date={selectedDate} orders={sortedOrders} />
                 </Paper>
             ) : (
-                <OrdersOverview orders={orders} />
+                <OrdersOverview orders={sortedOrders} isMobile={isMobile} isTablet={isTablet} />
             )}
         </Box>
     );
 };
 
-// Orders Overview Component
-const OrdersOverview: React.FC<{ orders: Order[] }> = ({ orders }) => {
-    return (
-        <Paper sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-                Danh sách đơn hàng
-            </Typography>
-            <Box sx={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                    <thead>
-                    <tr style={{ backgroundColor: '#f5f5f5' }}>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Khách hàng</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Loại dịch vụ</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Sản phẩm</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Giai đoạn</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Ưu tiên</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Trạng thái</th>
-                        <th style={{ padding: '12px', textAlign: 'left' }}>Ngày giao</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {orders.map((order) => (
-                        <tr key={order.id} style={{ borderBottom: '1px solid #e0e0e0' }}>
-                            <td style={{ padding: '12px' }}>
-                                <Typography variant="body2" fontWeight="bold">
+// Improved Orders Overview Component with responsive design
+const OrdersOverview: React.FC<{ orders: Order[], isMobile: boolean, isTablet: boolean }> = ({ orders, isMobile, isTablet }) => {
+
+    if (isMobile) {
+        // Mobile card view
+        return (
+            <Box>
+                <Typography variant="h6" gutterBottom sx={{ px: 1 }}>
+                    Danh sách đơn hàng
+                </Typography>
+                {orders.map((order) => (
+                    <Card key={order.id} sx={{ mb: 2 }}>
+                        <CardContent>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                                <Typography variant="subtitle1" fontWeight="bold">
                                     {order.customer_name}
                                 </Typography>
-                                <Typography variant="caption" color="text.secondary">
-                                    {order.customer_phone}
-                                </Typography>
-                            </td>
-                            <td style={{ padding: '12px' }}>
+                                <Chip
+                                    label={order.priority === 'urgent' ? 'Gấp' : 'Thường'}
+                                    size="small"
+                                    color={order.priority === 'urgent' ? 'error' : 'default'}
+                                />
+                            </Box>
+
+                            <Typography variant="caption" color="text.secondary" display="block">
+                                {order.customer_phone}
+                            </Typography>
+
+                            <Box sx={{ mt: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
                                 <Chip
                                     label={order.service_type === 'make_new' ? 'Làm mới' : 'Sửa/Cập nhật'}
                                     size="small"
                                     color={order.service_type === 'make_new' ? 'primary' : 'secondary'}
                                 />
-                            </td>
-                            <td style={{ padding: '12px' }}>
-                                {order.product_name} (x{order.product_quantity})
-                            </td>
-                            <td style={{ padding: '12px' }}>
+                                <Chip
+                                    label={order.material_status ? 'Chờ vải' : 'Đủ vải'}
+                                    size="small"
+                                    color={order.material_status ? 'warning' : 'success'}
+                                    variant="outlined"
+                                />
                                 {order.current_stage && (
                                     <Chip
                                         label={getStageLabel(order.current_stage.name)}
@@ -232,31 +254,103 @@ const OrdersOverview: React.FC<{ orders: Order[] }> = ({ orders }) => {
                                         variant="outlined"
                                     />
                                 )}
-                            </td>
-                            <td style={{ padding: '12px' }}>
+                            </Box>
+
+                            <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid #e0e0e0' }}>
+                                <Typography variant="body2">
+                                    <strong>Sản phẩm:</strong> {order.product_name} (x{order.product_quantity})
+                                </Typography>
+                                <Typography variant="body2">
+                                    <strong>Ngày giao:</strong> {order.delivery_appointment_date ? formatDate(order.delivery_appointment_date) : 'N/A'}
+                                </Typography>
+                            </Box>
+                        </CardContent>
+                    </Card>
+                ))}
+            </Box>
+        );
+    }
+
+    // Desktop/Tablet table view with improved responsive design
+    return (
+        <TableContainer component={Paper}>
+            <Typography variant="h6" sx={{ p: 2, pb: 0 }}>
+                Danh sách đơn hàng
+            </Typography>
+            <Table sx={{ minWidth: isTablet ? 650 : 950 }}>
+                <TableHead>
+                    <TableRow sx={{ backgroundColor: '#f5f5f5' }}>
+                        <TableCell>Khách hàng</TableCell>
+                        <TableCell>Loại dịch vụ</TableCell>
+                        <TableCell>Sản phẩm</TableCell>
+                        {!isTablet && <TableCell>Giai đoạn</TableCell>}
+                        <TableCell>Ưu tiên</TableCell>
+                        <TableCell>Trạng thái</TableCell>
+                        <TableCell align="right">Ngày giao</TableCell>
+                    </TableRow>
+                </TableHead>
+                <TableBody>
+                    {orders.map((order) => (
+                        <TableRow key={order.id} hover>
+                            <TableCell>
+                                <Typography variant="body2" fontWeight="bold">
+                                    {order.customer_name}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    {order.customer_phone}
+                                </Typography>
+                            </TableCell>
+                            <TableCell>
+                                <Chip
+                                    label={order.service_type === 'make_new' ? 'Làm mới' : 'Sửa/Cập nhật'}
+                                    size="small"
+                                    color={order.service_type === 'make_new' ? 'primary' : 'secondary'}
+                                />
+                            </TableCell>
+                            <TableCell>
+                                <Typography variant="body2">
+                                    {order.product_name}
+                                </Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    SL: {order.product_quantity}
+                                </Typography>
+                            </TableCell>
+                            {!isTablet && (
+                                <TableCell>
+                                    {order.current_stage && (
+                                        <Chip
+                                            label={getStageLabel(order.current_stage.name)}
+                                            size="small"
+                                            variant="outlined"
+                                        />
+                                    )}
+                                </TableCell>
+                            )}
+                            <TableCell>
                                 <Chip
                                     label={order.priority === 'urgent' ? 'Gấp' : 'Thường'}
                                     size="small"
                                     color={order.priority === 'urgent' ? 'error' : 'default'}
                                 />
-                            </td>
-                            <td style={{ padding: '12px' }}>
+                            </TableCell>
+                            <TableCell>
                                 <Chip
                                     label={order.material_status ? 'Chờ vải' : 'Đủ vải'}
                                     size="small"
                                     color={order.material_status ? 'warning' : 'success'}
                                     variant="outlined"
                                 />
-                            </td>
-                            <td style={{ padding: '12px' }}>
-                                {formatDate(order.delivery_appointment_date)}
-                            </td>
-                        </tr>
+                            </TableCell>
+                            <TableCell align="right">
+                                <Typography variant="body2">
+                                    {order.delivery_appointment_date ? formatDate(order.delivery_appointment_date) : 'N/A'}
+                                </Typography>
+                            </TableCell>
+                        </TableRow>
                     ))}
-                    </tbody>
-                </table>
-            </Box>
-        </Paper>
+                </TableBody>
+            </Table>
+        </TableContainer>
     );
 };
 

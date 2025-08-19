@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase'; // Fixed import path
+import { supabase } from '../lib/supabase';
 import { Order, CreateOrderData, UpdateOrderData, StaffLeave, TaskStage } from '../types/database';
 import {
     calculateSampleTestingDate,
@@ -111,22 +111,49 @@ export const useOrders = () => {
 
     const createOrder = async (orderData: CreateOrderData) => {
         try {
+            // Determine if decoration is needed based on staff_in_charge
+            const needsDecoration = orderData.staff_in_charge === 'decorator' ||
+                orderData.staff_in_charge === 'both';
+
             // Calculate dates based on current capacity and leaves
             const sampleTestingDate = calculateSampleTestingDate(
                 orderData.order_date,
-                orderData.priority,
                 orderData.material_status,
-                orders,
-                staffLeaves
+                orderData.priority,
+                orderData.service_type,
+                staffLeaves,
+                orders
             );
 
             const deliveryDate = orderData.priority === 'regular'
-                ? calculateDeliveryDate(sampleTestingDate, orderData.staff_in_charge, staffLeaves)
-                : null;
+                ? calculateDeliveryDate(
+                    sampleTestingDate,
+                    orderData.service_type,
+                    needsDecoration,
+                    0, // additionalDays
+                    staffLeaves,
+                    orders,
+                    orderData.priority
+                )
+                : orderData.actual_delivery_date;
 
-            const overtimeRequired = orderData.priority === 'urgent'
-                ? calculateOvertimeRequired(orderData, orders, staffLeaves)
-                : false;
+            // Calculate overtime for urgent orders
+            let overtimeRequired = false;
+            if (orderData.priority === 'urgent' && deliveryDate) {
+                const calculatedDate = calculateDeliveryDate(
+                    sampleTestingDate,
+                    orderData.service_type,
+                    needsDecoration,
+                    0,
+                    staffLeaves,
+                    orders,
+                    'regular' // Calculate as regular to compare
+                );
+                overtimeRequired = calculateOvertimeRequired(
+                    deliveryDate,
+                    calculatedDate || sampleTestingDate
+                );
+            }
 
             const newOrder = {
                 ...orderData,
@@ -160,6 +187,7 @@ export const useOrders = () => {
             return { success: true, data };
         } catch (err) {
             const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+            console.error('Error in createOrder:', err);
             return { success: false, error: errorMessage };
         }
     };

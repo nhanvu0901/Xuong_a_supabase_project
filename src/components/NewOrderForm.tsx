@@ -47,37 +47,53 @@ const NewOrderForm: React.FC = () => {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
+        // Extract only the fields that belong to CreateOrderData
         const orderData: CreateOrderData = {
-            ...formData,
-            service_type: serviceType,
+            customer_name: formData.customer_name,
             customer_dob: formData.customer_dob || null,
+            customer_phone: formData.customer_phone,
             referrer: formData.referrer || null,
+            product_quantity: formData.product_quantity,
+            product_name: formData.product_name,
+            product_price: formData.product_price,
+            material_status: formData.material_status,
+            priority: formData.priority,
+            service_type: serviceType,
+            order_date: formData.order_date,
+            staff_in_charge: formData.needs_decoration ? 'both' : formData.staff_in_charge, // Use 'both' if decoration is needed
             actual_sample_testing_date: null,
-            actual_delivery_date: formData.priority === 'urgent' ? formData.actual_delivery_date : null
+            actual_delivery_date: formData.priority === 'urgent' && formData.actual_delivery_date
+                ? formData.actual_delivery_date
+                : null
         };
 
-        const result = await createOrder(orderData);
+        try {
+            const result = await createOrder(orderData);
 
-        if (result.success) {
-            // Reset form
-            setFormData({
-                customer_name: '',
-                customer_dob: '',
-                customer_phone: '',
-                referrer: '',
-                product_quantity: 1,
-                product_name: '',
-                product_price: 0,
-                material_status: false,
-                priority: 'regular',
-                order_date: dayjs().format('YYYY-MM-DD'),
-                staff_in_charge: 'both',
-                actual_delivery_date: '',
-                needs_decoration: false
-            });
-            alert('Đã tạo đơn hàng thành công!');
-        } else {
-            alert('Lỗi khi tạo đơn hàng: ' + result.error);
+            if (result.success) {
+                // Reset form
+                setFormData({
+                    customer_name: '',
+                    customer_dob: '',
+                    customer_phone: '',
+                    referrer: '',
+                    product_quantity: 1,
+                    product_name: '',
+                    product_price: 0,
+                    material_status: false,
+                    priority: 'regular',
+                    order_date: dayjs().format('YYYY-MM-DD'),
+                    staff_in_charge: 'both',
+                    actual_delivery_date: '',
+                    needs_decoration: false
+                });
+                alert('Đã tạo đơn hàng thành công!');
+            } else {
+                alert('Lỗi khi tạo đơn hàng: ' + result.error);
+            }
+        } catch (error) {
+            console.error('Error creating order:', error);
+            alert('Lỗi khi tạo đơn hàng: ' + (error instanceof Error ? error.message : 'Unknown error'));
         }
     };
 
